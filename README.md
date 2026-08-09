@@ -1,36 +1,45 @@
-# Scry — SVG HMI Editor
+# Scry: SVG HMI Editor
 
 Scry is a browser-based editor for building process-and-instrumentation
-(P&ID) style diagrams — valves, pipes, compressors, gas cylinders, gauges,
-indicators, and similar equipment — for gas and fluid systems. You lay the
+(P&ID) style diagrams: valves, pipes, compressors, gas cylinders, gauges,
+indicators, and similar equipment for gas and fluid systems. You lay the
 diagram out once, visually, and export it as a single self-contained SVG.
 
-What makes the export special is that it's *alive*: every value, label, and
+What makes the export special is that it's *alive*. Every value, label, and
 status indicator you place is tagged with a predictable element ID, so an
 external dashboard or monitoring system can find those elements and update
-them with live process data — text values, setpoints, and color-coded status
-— without ever having to touch the SVG file itself again. Build the diagram
+them with live process data (text values, setpoints, and color-coded status)
+without ever having to touch the SVG file itself again. Build the diagram
 once, then *scry* the running system through it.
 
 ## Features
 
-- **Component library** — valves, pipes, compressors, cylinders, flow
+- **Component library**: valves, pipes, compressors, cylinders, flow
   meters, burst disks, gauges/indicators, and generic equipment boxes, each
   with defined connection ports.
 - **Auto-routed pipes** with draggable waypoints/knots, port snapping, and
   free/disconnected ends.
 - **Free-form shapes** (rectangles, lines, polygons, text) for annotation
   and diagram framing.
-- **Leader lines** — freeform annotation lines that can dock to a
+- **Leader lines**: freeform annotation lines that can dock to a
   component's label or a shape's border.
-- **Image layers** — trace over a background image (e.g. a floor plan or
+- **Image layers**: trace over a background image (e.g. a floor plan or
   scanned drawing) or embed reference imagery in the final export.
-- **Project storage with history** — named projects persisted server-side,
+- **Project storage with history**: named projects persisted server-side,
   versioned, with undo/redo.
-- **Tag-based live export** — every taggable element is exported using a
+- **Tag-based live export**: every taggable element is exported using a
   simple, predictable `<Name>_<suffix>` ID convention (`_value`, `_name`,
   `_setpoint`, `_indicator`), so any downstream system that can address SVG
   elements by ID and set their text/fill can drive the diagram live.
+
+  ```js
+  // Update a measured value and its setpoint
+  svg.querySelector('#PT101_value > text').textContent = '4.2 bar'
+  svg.querySelector('#PT101_setpoint > text').textContent = '4.0 bar'
+
+  // Drive a status indicator (color on the group, never on child paths)
+  svg.querySelector('#PT101_indicator').style.fill = 'LawnGreen'
+  ```
 
 ## Setup (local)
 
@@ -41,7 +50,7 @@ npm install
 npm run dev          # starts both the Vite dev server (5173) and the Express API/backend (3000)
 ```
 
-The frontend proxies `/api/*` to the backend, so both must be running —
+The frontend proxies `/api/*` to the backend, so both must be running.
 `npm run dev` does this for you; to run them in separate terminals instead,
 use `npm run dev:web` and `npm run dev:server`.
 
@@ -52,7 +61,7 @@ npm run typecheck
 npm run build         # builds packages/web/dist
 ```
 
-## Docker
+## Docker (build locally)
 
 Requires Docker Desktop (including Compose).
 
@@ -63,6 +72,35 @@ docker compose up --build
 The container listens on port 3000 and stores projects, libraries, and
 exported SVGs under `./data/{projects,libraries,export}` (see
 `docker-compose.yml`).
+
+## Docker (prebuilt image)
+
+Pull the image published by CI instead of building it locally:
+
+```yaml
+services:
+  scry:
+    image: ghcr.io/l-althueser/scry:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data/projects:/data/projects
+      - ./data/libraries:/data/libraries
+      - ./data/export:/data/export
+    environment:
+      - PORT=3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+```
+
+```sh
+docker compose up -d
+```
 
 ## Project structure
 
@@ -75,7 +113,7 @@ packages/
 
 ## License
 
-BSD 3-Clause — see [LICENSE](LICENSE).
+BSD 3-Clause, see [LICENSE](LICENSE).
 
 ## Acknowledgements
 
