@@ -1,0 +1,12 @@
+# Node / build
+node_modules/
+dist/
+build/
+.env
+.env.*
+
+# Editor runtime data (once the app exists)
+data/
+
+# Local Claude Code settings (per-user, not shared)
+.claude

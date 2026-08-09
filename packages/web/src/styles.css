@@ -1,0 +1,674 @@
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  color: #1a1a1a;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.app-title {
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.app-title-icon {
+  width: 1.3rem;
+  height: 1.3rem;
+  flex: 0 0 auto;
+}
+
+.app-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.toolbar-group {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  background: #ddd;
+  margin: 0 0.15rem;
+}
+
+.tool-button {
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.tool-button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.tool-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tool-button.icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tool-button.icon-button.icon-only {
+  padding: 0.25rem;
+  gap: 0;
+}
+
+.component-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.component-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.tool-button.icon-button.active .component-icon {
+  filter: brightness(0) invert(1);
+}
+
+.app-project-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  border-bottom: 1px solid #ddd;
+  background: #fafafa;
+}
+
+.sync-badge {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.sync-badge-unsaved {
+  background: #eee;
+  color: #555;
+}
+
+.sync-badge-dirty {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.sync-badge-saving {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.sync-badge-synced {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.sync-badge-conflict,
+.sync-badge-error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.conflict-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: #fff1f2;
+  border-bottom: 1px solid #fecdd3;
+  color: #9f1239;
+  font-size: 0.85rem;
+}
+
+.project-name-input,
+.project-select {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.project-name-input {
+  width: 12rem;
+}
+
+.server-status {
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.app-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.canvas-container {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.layer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.layer-row-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 0.4rem;
+  background: #fff;
+}
+
+.version-history {
+  margin: 0.4rem 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid #ddd;
+}
+
+.layer-row.selected {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.layer-name-button {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.15rem 0.2rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.layer-name-button:hover {
+  background: #eee;
+}
+
+.layer-row.selected .layer-name-button {
+  font-weight: 600;
+}
+
+.layer-row-buttons {
+  display: flex;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+}
+
+.layer-row-buttons .tool-button {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.layer-row-buttons .tool-button.danger {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+.layer-rect-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+.layer-rect-grid input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.properties-panel {
+  flex: 0 0 260px;
+  border-left: 1px solid #ddd;
+  padding: 1rem;
+  overflow-y: auto;
+  background: #fafafa;
+}
+
+.properties-panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+}
+
+.properties-panel-header {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.properties-panel-header h2 {
+  margin: 0;
+}
+
+.properties-empty {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border: none;
+  padding: 0;
+}
+
+.field span,
+.field legend {
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.field input[type='text'],
+.field input:not([type]) {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.field-error {
+  color: #c0392b;
+  font-size: 0.8rem;
+  margin: -0.5rem 0 0.75rem;
+}
+
+.field-hint {
+  color: #888;
+  font-size: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+
+.roles-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.role-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+}
+
+.field-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.field-row button {
+  flex: 1;
+  padding: 0.35rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.field-row button.danger {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+.app-statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 1rem;
+  font-size: 0.8rem;
+  color: #666;
+  border-top: 1px solid #ddd;
+}
+
+.gv-selected .gv-valve-outline path {
+  stroke: #2563eb;
+}
+
+/* Generic fallback highlight for types without a body/icon shape (e.g. process-indicator). */
+.gv-selected .gv-role rect {
+  stroke: #2563eb;
+  stroke-width: 2;
+}
+
+/* Blue glow instead of overriding stroke/fill directly — shapes have user-chosen colors of their own. */
+.shapes-layer .gv-selected {
+  filter: drop-shadow(0 0 2px #2563eb) drop-shadow(0 0 2px #2563eb);
+}
+
+.gv-shape-draft {
+  stroke: #2563eb;
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.gv-place-preview {
+  filter: saturate(0.6);
+}
+
+[data-role] {
+  cursor: move;
+}
+
+.gv-connector-line {
+  stroke: #2563eb;
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  opacity: 0.7;
+}
+
+/* Big, unambiguous "grab here to move it" target for a selected instance —
+   icons are often thin fill:none strokes (easy to miss with the mouse), and
+   an "indicator" role overlay can otherwise claim the whole icon area for
+   role-nudging instead of moving the component. Semi-transparent so the
+   icon underneath still reads clearly. */
+.gv-drag-handle circle {
+  fill: rgba(37, 99, 235, 0.12);
+  stroke: #2563eb;
+  stroke-width: 1.5;
+  cursor: move;
+}
+
+.gv-drag-handle:hover circle {
+  fill: rgba(37, 99, 235, 0.22);
+}
+
+.gv-drag-handle-glyph {
+  stroke: #2563eb;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.gv-box-select {
+  fill: rgba(37, 99, 235, 0.1);
+  stroke: #2563eb;
+  stroke-width: 1;
+  stroke-dasharray: 4 2;
+}
+
+/* Matches the specificity of the .gv-selected fallback above so the
+   individually-selected role's orange highlight always wins the tie. */
+.gv-role.gv-role-selected rect {
+  stroke: #f59e0b;
+  stroke-width: 2;
+}
+
+.gv-role-selected text {
+  fill: #f59e0b;
+}
+
+.gv-pipe-line {
+  /* stroke color is set per-pipe in SvgCanvas.syncPipes (resolvePipeColor) */
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.gv-selected .gv-pipe-line {
+  stroke: #2563eb;
+  stroke-width: 2.5;
+}
+
+.gv-pipe-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+}
+
+/* A white ring around the indicator dot reads as a deliberate marker in the
+   editor rather than a stray black artifact sitting on the pipe line. */
+.gv-pipe-indicator {
+  cursor: default;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+
+.gv-pipe-draft {
+  stroke: #2563eb;
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.gv-port-marker {
+  fill: #16a34a;
+  stroke: #ffffff;
+  stroke-width: 1;
+}
+
+.gv-port-marker.gv-connection-point-selected {
+  fill: #db2777;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+
+.gv-waypoint-handle {
+  fill: #ffffff;
+  stroke: #2563eb;
+  stroke-width: 2;
+  cursor: move;
+}
+
+.gv-waypoint-handle.gv-waypoint-selected {
+  fill: #f59e0b;
+  stroke: #f59e0b;
+}
+
+/* A pipe's actual from/to connection point — square-ish (via a slightly
+   larger radius + filled center) so it reads as "this end attaches to
+   something" versus a plain round interior waypoint. Draggable off its
+   component to disconnect, same gesture as any other handle. */
+.gv-pipe-endpoint-handle {
+  fill: #2563eb;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  r: 4.5;
+}
+
+/* Gray/dashed, deliberately distinct from pipes (blue/solid) — a leader
+   line is a plain annotation pointer, not part of the process topology. */
+.gv-leader-line {
+  stroke: #6b7280;
+  stroke-width: 1.25;
+  stroke-dasharray: 4 2;
+}
+
+.gv-selected .gv-leader-line {
+  stroke: #2563eb;
+  stroke-width: 1.75;
+}
+
+.gv-leader-line-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+}
+
+.gv-leader-line-dot {
+  fill: #6b7280;
+}
+
+.gv-selected .gv-leader-line-dot {
+  fill: #2563eb;
+}
+
+.gv-leader-line-draft {
+  stroke: #2563eb;
+  stroke-width: 1.25;
+  stroke-dasharray: 4 2;
+}
+
+.gv-layer-resize-handle {
+  fill: #ffffff;
+  stroke: #3b82f6;
+  stroke-width: 1.5;
+}
+
+.gv-align-guide {
+  stroke: #f59e0b;
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  opacity: 0.9;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.library-editor-modal {
+  width: min(1000px, 92vw);
+}
+
+.library-editor-columns {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.library-editor-fields {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.library-editor-preview {
+  flex: 0 0 260px;
+  position: sticky;
+  top: 0;
+}
+
+.library-editor-extra {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.library-preview-svg {
+  width: 100%;
+  aspect-ratio: 1;
+  background: #f4f4f4;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.library-preview-axis {
+  stroke: #ddd;
+  stroke-width: 1;
+}
+
+.library-preview-bounds {
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.library-preview-label-anchor {
+  fill: #f59e0b;
+}
+
+.shape-primitive-row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shape-primitive-kind {
+  font-size: 0.8rem;
+  color: #666;
+  text-transform: capitalize;
+  min-width: 3.5rem;
+}
+
+.shape-primitive-path-input {
+  flex: 1 1 auto;
+  min-width: 10rem;
+}
+
+.shape-num-input {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #555;
+}
+
+.shape-num-input input {
+  width: 3.5rem;
+}

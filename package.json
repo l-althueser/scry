@@ -1,0 +1,19 @@
+{
+  "name": "scry",
+  "private": true,
+  "version": "0.0.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n web,server -c blue,green \"npm run dev:web\" \"npm run dev:server\"",
+    "dev:web": "npm run dev --workspace packages/web",
+    "dev:server": "npm run dev --workspace packages/server",
+    "build": "npm run build --workspace packages/web",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.5.4"
+  }
+}

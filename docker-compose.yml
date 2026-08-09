@@ -1,0 +1,14 @@
+services:
+  svg-editor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data/projects:/data/projects
+      - ./data/libraries:/data/libraries
+      - ./data/export:/data/export
+    environment:
+      - PORT=3000
+    restart: unless-stopped
