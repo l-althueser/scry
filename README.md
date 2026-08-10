@@ -89,8 +89,12 @@ services:
       - ./data/export:/data/export
     environment:
       - PORT=3000
+      # - BASE_PATH=/scry # See below
+      # - BASIC_AUTH_USER=admin # See below
+      # - BASIC_AUTH_PASSWORD_HASH=$2y$05$UHkNuabejLMfoO...
     restart: unless-stopped
     healthcheck:
+      # Make sure the port matches the one in the `PORT` env var above
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 5s
@@ -154,15 +158,31 @@ docker run --rm ghcr.io/l-althueser/scry:latest node -e "console.log(require('bc
 (`htpasswd -B` emits a `$2y$...` hash; the server's `bcryptjs` verifies
 `$2y$`/`$2a$`/`$2b$` interchangeably, so this is fully compatible.)
 
-Put the resulting hash in a `.env` file next to `docker-compose.yml` — not
-inline in the YAML — and don't re-quote it: bcrypt hashes contain `$`
-characters that shells (and Compose's own `${...}` substitution) can mangle
-if pasted somewhere other than a `.env` value.
+**Put the resulting hash in a `.env` file next to `docker-compose.yml`, not
+inline in the YAML.** Compose interpolates `$VAR`/`${VAR}` inside
+`docker-compose.yml` itself, and a bcrypt hash is full of `$`-prefixed
+segments that look exactly like variable references — pasted directly into
+the YAML, something like `$2y$05$UHkNuabej...` gets silently mangled (the
+`$UHkNuabej...` part looks like a variable name, so Compose swaps it for an
+empty string, usually with an easy-to-miss "variable is not set" warning),
+truncating the hash so every login just fails with no clear error. `.env`
+values aren't re-interpolated this way, so this is the safe default:
+
+```
+# .env
+BASIC_AUTH_PASSWORD_HASH=$2y$05$UHkNuabejLMfoO...
+```
+
+If you really want it inline in `docker-compose.yml` anyway, double every `$`
+(`$$`) to escape it:
+```yaml
+- BASIC_AUTH_PASSWORD_HASH=$$2y$$05$$UHkNuabejLMfoO...
+```
 
 ```
 # .env
 BASIC_AUTH_USER=admin
-BASIC_AUTH_PASSWORD_HASH=$2y$10$abc...
+BASIC_AUTH_PASSWORD_HASH=$2y$05$UHkNuabejLMfoO...
 ```
 
 ## Project structure
