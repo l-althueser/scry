@@ -128,6 +128,43 @@ services:
 Leave `BASE_PATH` unset for a root-mounted deployment (the default, unchanged
 behavior).
 
+## Basic authentication
+
+Off by default. Set **both** `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD_HASH`
+to gate the whole app (frontend + API, but not the `/api/health` endpoint
+docker-compose's own healthcheck uses) behind a single HTTP Basic Auth
+username/password. `BASIC_AUTH_PASSWORD_HASH` is a **bcrypt hash**, never the
+plaintext password — generate one with whichever of these you have on hand:
+
+```sh
+# Plain Linux tool (apache2-utils on Debian/Ubuntu, httpd-tools on RHEL/Fedora) — no Node needed
+htpasswd -nbB anyuser 'your-password-here' | cut -d: -f2
+```
+
+```sh
+# Local Node
+node -e "console.log(require('bcryptjs').hashSync(process.argv[1], 10))" 'your-password-here'
+```
+
+```sh
+# No local Node — use the built image itself
+docker run --rm ghcr.io/l-althueser/scry:latest node -e "console.log(require('bcryptjs').hashSync(process.argv[1], 10))" 'your-password-here'
+```
+
+(`htpasswd -B` emits a `$2y$...` hash; the server's `bcryptjs` verifies
+`$2y$`/`$2a$`/`$2b$` interchangeably, so this is fully compatible.)
+
+Put the resulting hash in a `.env` file next to `docker-compose.yml` — not
+inline in the YAML — and don't re-quote it: bcrypt hashes contain `$`
+characters that shells (and Compose's own `${...}` substitution) can mangle
+if pasted somewhere other than a `.env` value.
+
+```
+# .env
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASSWORD_HASH=$2y$10$abc...
+```
+
 ## Project structure
 
 ```

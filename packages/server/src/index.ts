@@ -1,4 +1,5 @@
 import express from 'express'
+import bcrypt from 'bcryptjs'
 import path from 'node:path'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -20,6 +21,11 @@ const DATA_DIR = process.env.DATA_DIR ?? path.resolve(__dirname, '../../../data'
  * proxy rule). Normalized: leading "/", no trailing "/", "" if unset.
  */
 const BASE_PATH = (process.env.BASE_PATH ?? '').replace(/\/+$/, '').replace(/^(?!\/|$)/, '/')
+// Both must be set to turn auth on — unset (the default) means the app stays
+// fully open, exactly as before this feature existed. BASIC_AUTH_PASSWORD_HASH
+// is a bcrypt hash, never the plaintext password — see README for how to make one.
+const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER
+const BASIC_AUTH_PASSWORD_HASH = process.env.BASIC_AUTH_PASSWORD_HASH
 const PROJECTS_DIR = path.join(DATA_DIR, 'projects')
 const LIBRARIES_DIR = path.join(DATA_DIR, 'libraries')
 const EXPORT_DIR = path.join(DATA_DIR, 'export')
@@ -136,6 +142,34 @@ async function seedExampleProject() {
 
 const app = express()
 app.use(express.json({ limit: '20mb' }))
+
+// Opt-in HTTP Basic Auth, gated on both env vars being set (see their
+// declarations above) — a no-op middleware otherwise, so an unconfigured
+// deployment behaves exactly as it did before this feature existed.
+if (BASIC_AUTH_USER && BASIC_AUTH_PASSWORD_HASH) {
+  app.use((req, res, next) => {
+    // Always unauthenticated — this is what docker-compose's own healthcheck
+    // hits from inside the container, with no credentials attached.
+    if (req.path === '/api/health') {
+      next()
+      return
+    }
+
+    const header = req.headers.authorization
+    const credentials = header?.startsWith('Basic ') ? Buffer.from(header.slice(6), 'base64').toString('utf8') : null
+    const separatorIndex = credentials?.indexOf(':') ?? -1
+    const user = separatorIndex >= 0 ? credentials!.slice(0, separatorIndex) : null
+    const password = separatorIndex >= 0 ? credentials!.slice(separatorIndex + 1) : null
+
+    if (user === BASIC_AUTH_USER && password !== null && bcrypt.compareSync(password, BASIC_AUTH_PASSWORD_HASH)) {
+      next()
+      return
+    }
+
+    res.set('WWW-Authenticate', 'Basic realm="Scry"')
+    res.status(401).json({ error: 'authentication required' })
+  })
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' })

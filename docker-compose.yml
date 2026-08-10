@@ -16,6 +16,11 @@ services:
       # asset/API requests are rewritten to go back out through that same
       # prefix instead of the site root. Leave unset for a root-mounted deployment.
       - BASE_PATH=${BASE_PATH:-}
+      # Both must be set to turn on HTTP Basic Auth (off by default). Put
+      # these in a .env file next to this compose file, not inline here —
+      # see the README for how to generate BASIC_AUTH_PASSWORD_HASH.
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER:-}
+      - BASIC_AUTH_PASSWORD_HASH=${BASIC_AUTH_PASSWORD_HASH:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
