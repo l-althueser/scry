@@ -1,7 +1,11 @@
 import type { Project } from '@svg-editor/shared'
 import type { CustomComponentSpec } from '../library/customTypes'
 
-const API_BASE = '/api'
+// window.__BASE_PATH__ is injected by the server (see buildIndexHtml in
+// packages/server/src/index.ts) only when the BASE_PATH env var is set —
+// lets one prebuilt image work at any reverse-proxy subpath, chosen at
+// `docker run`/compose time rather than baked in at `npm run build`.
+const API_BASE = `${(window as unknown as { __BASE_PATH__?: string }).__BASE_PATH__ ?? ''}/api`
 
 async function expectOk(res: Response, action: string): Promise<Response> {
   if (!res.ok) {

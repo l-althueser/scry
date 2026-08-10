@@ -11,6 +11,15 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000
 // Defaults match the monorepo layout for local dev; overridden by env vars in Docker.
 const WEB_DIST = process.env.WEB_DIST ?? path.resolve(__dirname, '../../web/dist')
 const DATA_DIR = process.env.DATA_DIR ?? path.resolve(__dirname, '../../../data')
+/**
+ * Set when this container sits behind a reverse proxy that mounts it under a
+ * subpath (e.g. Traefik `PathPrefix(/scry)` + a strip-prefix middleware, so
+ * this process itself always sees unprefixed paths — only the *built HTML/JS
+ * it hands back to the browser* needs to know the prefix, so the browser's
+ * follow-up asset/API requests go out with it and come back through the same
+ * proxy rule). Normalized: leading "/", no trailing "/", "" if unset.
+ */
+const BASE_PATH = (process.env.BASE_PATH ?? '').replace(/\/+$/, '').replace(/^(?!\/|$)/, '/')
 const PROJECTS_DIR = path.join(DATA_DIR, 'projects')
 const LIBRARIES_DIR = path.join(DATA_DIR, 'libraries')
 const EXPORT_DIR = path.join(DATA_DIR, 'export')
@@ -101,6 +110,21 @@ async function readProjectRenamed(sourcePath: string, newName: string): Promise<
   const project = JSON.parse(raw)
   project.meta = { ...project.meta, id: newName, name: newName, modifiedAt: new Date().toISOString() }
   return JSON.stringify(project, null, 2)
+}
+
+/**
+ * Reads the built index.html once at startup and, if basePath is set,
+ * rewrites its absolute `/`-rooted asset references to live under it (so the
+ * browser's follow-up requests come back through the same reverse-proxy
+ * prefix rule) and injects window.__BASE_PATH__ so the frontend's own API
+ * calls (see packages/web/src/api/client.ts) can do the same at runtime —
+ * one built image, base path chosen at `docker run`/compose time, no rebuild.
+ */
+function buildIndexHtml(indexPath: string, basePath: string): string {
+  const raw = fs.readFileSync(indexPath, 'utf8')
+  if (!basePath) return raw
+  const rewritten = raw.replace(/(src|href)="\//g, `$1="${basePath}/`)
+  return rewritten.replace('</head>', `<script>window.__BASE_PATH__ = ${JSON.stringify(basePath)};</script></head>`)
 }
 
 async function seedExampleProject() {
@@ -346,9 +370,13 @@ app.post('/api/export/:name', async (req, res) => {
 
 // Serve the built web app in production (packages/web/dist after `npm run build`).
 if (fs.existsSync(WEB_DIST)) {
-  app.use(express.static(WEB_DIST))
+  // `index: false` — index.html is served explicitly below (rewritten when
+  // BASE_PATH is set), never as express.static's own directory-index fallback.
+  app.use(express.static(WEB_DIST, { index: false }))
+
+  const indexHtml = buildIndexHtml(path.join(WEB_DIST, 'index.html'), BASE_PATH)
   app.get('*', (_req, res) => {
-    res.sendFile(path.join(WEB_DIST, 'index.html'))
+    res.type('html').send(indexHtml)
   })
 }
 

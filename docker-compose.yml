@@ -11,6 +11,11 @@ services:
       - ./data/export:/data/export
     environment:
       - PORT=3000
+      # Set if this container is reverse-proxied under a subpath (e.g. Traefik
+      # PathPrefix(`/scry`) with a strip-prefix middleware), so the browser's
+      # asset/API requests are rewritten to go back out through that same
+      # prefix instead of the site root. Leave unset for a root-mounted deployment.
+      - BASE_PATH=${BASE_PATH:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]

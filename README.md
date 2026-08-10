@@ -102,6 +102,32 @@ services:
 docker compose up -d
 ```
 
+## Reverse-proxy subpath hosting
+
+Set `BASE_PATH` (e.g. `BASE_PATH=/scry`) when this container is reverse-proxied
+under a subpath instead of the site root. It's read at container startup, not
+build time, so the same prebuilt image works at any subpath without a
+rebuild — the server rewrites the asset references in the built `index.html`
+and injects `window.__BASE_PATH__`, which the frontend uses for its API calls.
+
+Example with Traefik (labels on the service, using a `PathPrefix` route with
+a strip-prefix middleware so the container always sees unprefixed paths):
+
+```yaml
+services:
+  scry:
+    image: ghcr.io/l-althueser/scry:latest
+    environment:
+      - BASE_PATH=/scry
+    labels:
+      - traefik.http.routers.scry.rule=PathPrefix(`/scry`)
+      - traefik.http.middlewares.scry-strip.stripprefix.prefixes=/scry
+      - traefik.http.routers.scry.middlewares=scry-strip
+```
+
+Leave `BASE_PATH` unset for a root-mounted deployment (the default, unchanged
+behavior).
+
 ## Project structure
 
 ```
