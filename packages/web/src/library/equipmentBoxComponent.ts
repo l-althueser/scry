@@ -47,7 +47,7 @@ function textLines(text: string): string[] {
   return text.split('\n')
 }
 
-/** The box's own footprint (local, unrotated, top-left anchored at the instance origin) — grows to fit the "text" property, never shrinks below the original fixed size. */
+/** The box's own text-driven floor (local, unrotated, top-left anchored at the instance origin) — grows to fit the "text" property, never shrinks below the original fixed size. */
 function computeBoxSize(text: string): { width: number; height: number } {
   const trimmed = text.trim()
   if (!trimmed) return { width: MIN_WIDTH, height: MIN_HEIGHT }
@@ -56,6 +56,117 @@ function computeBoxSize(text: string): { width: number; height: number } {
   const width = Math.max(MIN_WIDTH, longest * APPROX_CHAR_WIDTH + TEXT_PADDING_X * 2)
   const height = Math.max(MIN_HEIGHT, lines.length * LINE_HEIGHT + TEXT_PADDING_Y * 2)
   return { width, height }
+}
+
+/** The box's actual rendered size: the text-driven floor, or a larger manual override from corner-drag resizing (SvgCanvas's resize-instance handles) — never smaller than what the current text needs. */
+function effectiveBoxSize(instance: ComponentInstance): { width: number; height: number } {
+  const min = computeBoxSize(boxText(instance))
+  const w = instance.propertyValues.width
+  const h = instance.propertyValues.height
+  return {
+    width: Math.max(min.width, typeof w === 'number' ? w : 0),
+    height: Math.max(min.height, typeof h === 'number' ? h : 0),
+  }
+}
+
+type PolygonShape = 'diamond' | 'connector-arrow' | 'double-connector-arrow' | 'block-arrow' | 'double-block-arrow'
+type BoxShape = 'rectangle' | 'rounded-rectangle' | 'ellipse' | PolygonShape
+
+const POLYGON_SHAPES: readonly PolygonShape[] = [
+  'diamond',
+  'connector-arrow',
+  'double-connector-arrow',
+  'block-arrow',
+  'double-block-arrow',
+]
+const ALL_SHAPES: readonly BoxShape[] = ['rectangle', 'rounded-rectangle', 'ellipse', ...POLYGON_SHAPES]
+
+function isPolygonShape(shape: BoxShape): shape is PolygonShape {
+  return (POLYGON_SHAPES as readonly string[]).includes(shape)
+}
+
+function boxShape(instance: ComponentInstance): BoxShape {
+  const raw = instance.propertyValues.shape
+  return typeof raw === 'string' && (ALL_SHAPES as readonly string[]).includes(raw) ? (raw as BoxShape) : 'rectangle'
+}
+
+/** connector-arrow: how far the point tapers in from the flat end, as a fraction of width. */
+const CONNECTOR_ARROW_TAPER_FRACTION = 0.7
+/** double-connector-arrow: how far each end's point tapers in, as a fraction of width (from its own end). */
+const DOUBLE_CONNECTOR_ARROW_TAPER_FRACTION = 0.3
+/** block-arrow (shaft + triangular head): how much of the width the head takes, and how much of the height the shaft takes (centered). */
+const BLOCK_ARROW_HEAD_WIDTH_FRACTION = 0.35
+const BLOCK_ARROW_SHAFT_HEIGHT_FRACTION = 0.5
+/** double-block-arrow: each head's share of the width (from its own end); the shaft fills whatever's left in the middle. */
+const DOUBLE_BLOCK_ARROW_HEAD_WIDTH_FRACTION = 0.25
+const DOUBLE_BLOCK_ARROW_SHAFT_HEIGHT_FRACTION = 0.5
+
+/**
+ * Point list for every non-rect/non-ellipse shape, always pointing local +x
+ * ("east"; rotate the instance to point elsewhere): a rhombus; a
+ * flowchart-style off-page-connector (rectangle tapering to a point), single-
+ * and double-ended; a classic block arrow (shaft + triangular head), single-
+ * and double-ended.
+ */
+function polygonPoints(shape: PolygonShape, width: number, height: number): string {
+  let points: { x: number; y: number }[]
+  if (shape === 'diamond') {
+    points = [
+      { x: width / 2, y: 0 },
+      { x: width, y: height / 2 },
+      { x: width / 2, y: height },
+      { x: 0, y: height / 2 },
+    ]
+  } else if (shape === 'connector-arrow') {
+    points = [
+      { x: 0, y: 0 },
+      { x: width * CONNECTOR_ARROW_TAPER_FRACTION, y: 0 },
+      { x: width, y: height / 2 },
+      { x: width * CONNECTOR_ARROW_TAPER_FRACTION, y: height },
+      { x: 0, y: height },
+    ]
+  } else if (shape === 'double-connector-arrow') {
+    const taper = width * DOUBLE_CONNECTOR_ARROW_TAPER_FRACTION
+    points = [
+      { x: 0, y: height / 2 },
+      { x: taper, y: 0 },
+      { x: width - taper, y: 0 },
+      { x: width, y: height / 2 },
+      { x: width - taper, y: height },
+      { x: taper, y: height },
+    ]
+  } else if (shape === 'block-arrow') {
+    const headX = width * (1 - BLOCK_ARROW_HEAD_WIDTH_FRACTION)
+    const shaftTop = (height * (1 - BLOCK_ARROW_SHAFT_HEIGHT_FRACTION)) / 2
+    const shaftBottom = height - shaftTop
+    points = [
+      { x: 0, y: shaftTop },
+      { x: headX, y: shaftTop },
+      { x: headX, y: 0 },
+      { x: width, y: height / 2 },
+      { x: headX, y: height },
+      { x: headX, y: shaftBottom },
+      { x: 0, y: shaftBottom },
+    ]
+  } else {
+    // shape === 'double-block-arrow'
+    const headW = width * DOUBLE_BLOCK_ARROW_HEAD_WIDTH_FRACTION
+    const shaftTop = (height * (1 - DOUBLE_BLOCK_ARROW_SHAFT_HEIGHT_FRACTION)) / 2
+    const shaftBottom = height - shaftTop
+    points = [
+      { x: 0, y: height / 2 },
+      { x: headW, y: 0 },
+      { x: headW, y: shaftTop },
+      { x: width - headW, y: shaftTop },
+      { x: width - headW, y: 0 },
+      { x: width, y: height / 2 },
+      { x: width - headW, y: height },
+      { x: width - headW, y: shaftBottom },
+      { x: headW, y: shaftBottom },
+      { x: headW, y: height },
+    ]
+  }
+  return points.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(' ')
 }
 
 /** One connection point centered on each of the box's four sides, following its current (text-dependent) size. */
@@ -116,6 +227,69 @@ function autoPackRoles(roles: RoleInstance[]): RoleInstance[] {
   return packRoleOffsets(roles, MIN_WIDTH / 2, LABEL_START_Y, LABEL_ROW_HEIGHT, true)
 }
 
+/**
+ * Builds the three shape-slot elements a box's body can be — a rect (serves
+ * both rectangle and rounded-rectangle via rx), an ellipse, and a polygon
+ * (serves both diamond and arrow via its points) — all but one hidden via
+ * display:none, same "build every variant once, toggle display" convention
+ * iconComponentFactory uses for optional decorative extras. update() shows/
+ * sizes whichever one matches the instance's current shape. Sized to the
+ * untexted minimum here so a render()-only context (the toolbar/palette
+ * preview icon, which never calls update() — see preview.ts) still shows a
+ * properly-sized box instead of a 0×0 shape; update() resizes the active one
+ * for any real placed instance.
+ */
+function appendShapeSlots(group: SVGGElement, withStroke: boolean) {
+  const rect = document.createElementNS(SVG_NS, 'rect')
+  rect.setAttribute('class', 'gv-eqbox-shape-rect')
+  rect.setAttribute('width', String(MIN_WIDTH))
+  rect.setAttribute('height', String(MIN_HEIGHT))
+  group.appendChild(rect)
+
+  const ellipse = document.createElementNS(SVG_NS, 'ellipse')
+  ellipse.setAttribute('class', 'gv-eqbox-shape-ellipse')
+  ellipse.style.display = 'none'
+  group.appendChild(ellipse)
+
+  const polygon = document.createElementNS(SVG_NS, 'polygon')
+  polygon.setAttribute('class', 'gv-eqbox-shape-polygon')
+  polygon.style.display = 'none'
+  group.appendChild(polygon)
+
+  if (withStroke) {
+    for (const el of [rect, ellipse, polygon]) {
+      el.setAttribute('stroke', '#000000')
+      el.setAttribute('stroke-width', '1.5')
+    }
+  }
+}
+
+/** Shows/sizes whichever of `group`'s three shape slots (see appendShapeSlots) matches `shape`, hiding the other two. */
+function applyShapeToGroup(group: SVGGElement, shape: BoxShape, width: number, height: number) {
+  const rect = group.querySelector<SVGRectElement>('.gv-eqbox-shape-rect')
+  const ellipse = group.querySelector<SVGEllipseElement>('.gv-eqbox-shape-ellipse')
+  const polygon = group.querySelector<SVGPolygonElement>('.gv-eqbox-shape-polygon')
+  const isRect = shape === 'rectangle' || shape === 'rounded-rectangle'
+  const isPolygon = isPolygonShape(shape)
+  if (rect) {
+    rect.style.display = isRect ? '' : 'none'
+    rect.setAttribute('width', String(width))
+    rect.setAttribute('height', String(height))
+    rect.setAttribute('rx', shape === 'rounded-rectangle' ? String(Math.min(width, height) * 0.15) : '0')
+  }
+  if (ellipse) {
+    ellipse.style.display = shape === 'ellipse' ? '' : 'none'
+    ellipse.setAttribute('cx', String(width / 2))
+    ellipse.setAttribute('cy', String(height / 2))
+    ellipse.setAttribute('rx', String(width / 2))
+    ellipse.setAttribute('ry', String(height / 2))
+  }
+  if (polygon) {
+    polygon.style.display = isPolygon ? '' : 'none'
+    if (isPolygon) polygon.setAttribute('points', polygonPoints(shape, width, height))
+  }
+}
+
 function render(group: SVGGElement) {
   const bodyGroup = document.createElementNS(SVG_NS, 'g')
   bodyGroup.setAttribute('class', 'gv-valve-body')
@@ -124,14 +298,7 @@ function render(group: SVGGElement) {
   indicatorGroup.setAttribute('class', 'gv-role gv-role-indicator')
   indicatorGroup.setAttribute('data-role', 'indicator')
   indicatorGroup.setAttribute('fill', 'black')
-  const indicatorRect = document.createElementNS(SVG_NS, 'rect')
-  // Sized to the untexted minimum here so a render()-only context (the
-  // toolbar/palette preview icon, which never calls update() — see
-  // preview.ts) still shows a properly-sized box instead of a 0×0 rect;
-  // update() resizes both rects together for any real placed instance.
-  indicatorRect.setAttribute('width', String(MIN_WIDTH))
-  indicatorRect.setAttribute('height', String(MIN_HEIGHT))
-  indicatorGroup.appendChild(indicatorRect)
+  appendShapeSlots(indicatorGroup, false)
   bodyGroup.appendChild(indicatorGroup)
 
   // The always-visible static box (colorable fill, independent of the live
@@ -141,12 +308,7 @@ function render(group: SVGGElement) {
   const bodyFillGroup = document.createElementNS(SVG_NS, 'g')
   bodyFillGroup.setAttribute('class', 'gv-valve-body-fill')
   bodyFillGroup.setAttribute('fill', '#e5e7eb')
-  const fillRect = document.createElementNS(SVG_NS, 'rect')
-  fillRect.setAttribute('width', String(MIN_WIDTH))
-  fillRect.setAttribute('height', String(MIN_HEIGHT))
-  fillRect.setAttribute('stroke', '#000000')
-  fillRect.setAttribute('stroke-width', '1.5')
-  bodyFillGroup.appendChild(fillRect)
+  appendShapeSlots(bodyFillGroup, true)
   bodyGroup.appendChild(bodyFillGroup)
 
   // The optional centered label baked directly into the box — not a
@@ -210,18 +372,14 @@ function update(group: SVGGElement, instance: ComponentInstance) {
   bodyGroup?.setAttribute('transform', `rotate(${fmt(rotationDeg)})`)
 
   const text = boxText(instance)
-  const { width, height } = computeBoxSize(text)
-
-  const indicatorRect = group.querySelector<SVGRectElement>('.gv-role-indicator rect')
-  indicatorRect?.setAttribute('width', String(width))
-  indicatorRect?.setAttribute('height', String(height))
-
-  const fillRect = group.querySelector<SVGRectElement>('.gv-valve-body-fill rect')
-  fillRect?.setAttribute('width', String(width))
-  fillRect?.setAttribute('height', String(height))
+  const { width, height } = effectiveBoxSize(instance)
+  const shape = boxShape(instance)
 
   const bodyFillGroup = group.querySelector<SVGGElement>('.gv-valve-body-fill')
-  bodyFillGroup?.setAttribute('fill', bodyFillColor(instance))
+  if (bodyFillGroup) {
+    applyShapeToGroup(bodyFillGroup, shape, width, height)
+    bodyFillGroup.setAttribute('fill', bodyFillColor(instance))
+  }
 
   const boxTextEl = group.querySelector<SVGTextElement>('.gv-eqbox-text')
   if (boxTextEl) renderBoxTextInto(boxTextEl, text, width, height)
@@ -229,6 +387,7 @@ function update(group: SVGGElement, instance: ComponentInstance) {
   const indicatorRole = instance.roles.find((r) => r.role === 'indicator')
   const indicatorGroup = group.querySelector<SVGGElement>('.gv-role-indicator')
   if (indicatorGroup) {
+    applyShapeToGroup(indicatorGroup, shape, width, height)
     indicatorGroup.style.display = indicatorRole?.enabled ? '' : 'none'
     indicatorGroup.id = `${instance.tag}_indicator`
   }
@@ -249,20 +408,31 @@ function update(group: SVGGElement, instance: ComponentInstance) {
   }
 }
 
+/** The exported markup for one of the three shape slots — mirrors applyShapeToGroup's element choice, no fill attr of its own when extraAttrs omits one (the indicator group's fill lives exclusively on its own `<g>`, per CLAUDE.md's Node-RED contract). */
+function shapeSvgElement(shape: BoxShape, width: number, height: number, extraAttrs: string): string {
+  if (shape === 'ellipse') {
+    return `<ellipse cx="${fmt(width / 2)}" cy="${fmt(height / 2)}" rx="${fmt(width / 2)}" ry="${fmt(height / 2)}"${extraAttrs} />`
+  }
+  if (isPolygonShape(shape)) {
+    return `<polygon points="${polygonPoints(shape, width, height)}"${extraAttrs} />`
+  }
+  const rx = shape === 'rounded-rectangle' ? ` rx="${fmt(Math.min(width, height) * 0.15)}"` : ''
+  return `<rect width="${fmt(width)}" height="${fmt(height)}"${rx}${extraAttrs} />`
+}
+
 function exportInstance(instance: ComponentInstance): string[] {
   const { x, y, rotationDeg } = instance.transform
   const tag = escapeXml(instance.tag)
   const lines: string[] = []
   const text = boxText(instance)
-  const { width, height } = computeBoxSize(text)
+  const { width, height } = effectiveBoxSize(instance)
+  const shape = boxShape(instance)
 
   lines.push(`    <!-- ${tag} (${escapeXml(instance.componentTypeId)}) -->`)
 
   lines.push(`    <g transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})">`)
   const fillColor = escapeXml(bodyFillColor(instance))
-  lines.push(
-    `      <rect width="${fmt(width)}" height="${fmt(height)}" fill="${fillColor}" stroke="#000000" stroke-width="1.5" />`,
-  )
+  lines.push(`      ${shapeSvgElement(shape, width, height, ` fill="${fillColor}" stroke="#000000" stroke-width="1.5"`)}`)
   if (text.trim()) {
     const bodyLines = textLines(text)
     const totalHeight = bodyLines.length * LINE_HEIGHT
@@ -286,7 +456,7 @@ function exportInstance(instance: ComponentInstance): string[] {
       lines.push(
         `    <g id="${tag}_indicator" transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})" fill="black">`,
       )
-      lines.push(`      <rect width="${fmt(width)}" height="${fmt(height)}" />`)
+      lines.push(`      ${shapeSvgElement(shape, width, height, '')}`)
       lines.push(`    </g>`)
       continue
     }
@@ -313,6 +483,22 @@ function exportInstance(instance: ComponentInstance): string[] {
 const instanceOptions: InstanceOptionDescriptor[] = [
   { key: 'fillColor', kind: 'color', label: 'Fill color', default: '#e5e7eb' },
   { key: 'text', kind: 'text', label: 'Box text (centered, grows the box to fit)', default: '' },
+  {
+    key: 'shape',
+    kind: 'select',
+    label: 'Shape',
+    default: 'rectangle',
+    options: [
+      { value: 'rectangle', label: 'Rectangle' },
+      { value: 'rounded-rectangle', label: 'Rounded rectangle' },
+      { value: 'ellipse', label: 'Ellipse' },
+      { value: 'diamond', label: 'Diamond' },
+      { value: 'connector-arrow', label: 'Arrow (off-page connector)' },
+      { value: 'double-connector-arrow', label: 'Double arrow (off-page connector)' },
+      { value: 'block-arrow', label: 'Arrow (pointed head)' },
+      { value: 'double-block-arrow', label: 'Double arrow (pointed head)' },
+    ],
+  },
 ]
 
 registerComponentType({
@@ -329,12 +515,17 @@ registerComponentType({
   localBodyCorners: boxCorners(MIN_WIDTH, MIN_HEIGHT),
   ports: computePorts(MIN_WIDTH, MIN_HEIGHT),
   getLocalBodyCorners: (instance) => {
-    const { width, height } = computeBoxSize(boxText(instance))
+    const { width, height } = effectiveBoxSize(instance)
     return boxCorners(width, height)
   },
   getPorts: (instance) => {
-    const { width, height } = computeBoxSize(boxText(instance))
+    const { width, height } = effectiveBoxSize(instance)
     return computePorts(width, height)
+  },
+  resizable: {
+    minSize: (instance) => computeBoxSize(boxText(instance)),
+    widthKey: 'width',
+    heightKey: 'height',
   },
   instanceOptions,
 })

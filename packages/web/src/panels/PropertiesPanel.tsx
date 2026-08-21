@@ -820,6 +820,24 @@ export function PropertiesPanel() {
             </label>
           )
         }
+        if (opt.kind === 'select') {
+          const value = typeof raw === 'string' ? raw : (opt.default as string)
+          return (
+            <label key={opt.key} className="field">
+              <span>{opt.label}</span>
+              <select
+                value={value}
+                onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
+              >
+                {opt.options?.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )
+        }
         const color = typeof raw === 'string' && raw ? raw : (opt.default as string)
         return (
           <label key={opt.key} className="field">
@@ -841,6 +859,27 @@ export function PropertiesPanel() {
           </label>
         )
       })}
+
+      {(() => {
+        const resizable = getComponentType(instance.componentTypeId).resizable
+        if (!resizable) return null
+        const hasOverride =
+          typeof instance.propertyValues[resizable.widthKey] === 'number' ||
+          typeof instance.propertyValues[resizable.heightKey] === 'number'
+        return (
+          <div className="field-row">
+            <button
+              onClick={() => {
+                setInstancePropertyValue(instance.instanceId, resizable.widthKey, null)
+                setInstancePropertyValue(instance.instanceId, resizable.heightKey, null)
+              }}
+              disabled={!hasOverride}
+            >
+              Reset size (fit to text)
+            </button>
+          </div>
+        )
+      })()}
 
       <div className="field-row">
         <button onClick={() => centerRoles(instance.instanceId)}>Re-center labels</button>

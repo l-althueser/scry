@@ -26,6 +26,7 @@ export function CanvasView() {
   const imageAspectLocked = useProjectStore((s) => s.imageAspectLocked)
   const addInstance = useProjectStore((s) => s.addInstance)
   const moveInstance = useProjectStore((s) => s.moveInstance)
+  const resizeInstance = useProjectStore((s) => s.resizeInstance)
   const moveRole = useProjectStore((s) => s.moveRole)
   const selectInstances = useProjectStore((s) => s.selectInstances)
   const selectRole = useProjectStore((s) => s.selectRole)
@@ -58,6 +59,7 @@ export function CanvasView() {
     const canvas = new SvgCanvas(containerRef.current, gridSize, {
       onInstanceAdded: (typeId, pt, keepPlacing) => addInstance(typeId, pt, keepPlacing),
       onInstanceMoved: (instanceId, pt) => moveInstance(instanceId, pt),
+      onInstanceResized: (instanceId, rect) => resizeInstance(instanceId, rect),
       onRoleMoved: (instanceId, role, offset) => moveRole(instanceId, role, offset),
       onDragCheckpoint: () => checkpointHistory(),
       onSelectionChanged: (instanceIds) => selectInstances(instanceIds),

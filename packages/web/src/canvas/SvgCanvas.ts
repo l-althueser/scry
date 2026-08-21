@@ -83,6 +83,8 @@ export interface SvgCanvasCallbacks {
   /** keepPlacing is true when Shift was held, so the tool should stay in place mode for placing several in a row. */
   onInstanceAdded: (componentTypeId: string, worldPoint: Point, keepPlacing: boolean) => void
   onInstanceMoved: (instanceId: string, worldPoint: Point) => void
+  /** Continuous drag from a resize-instance handle — see onLayerResized for the analogous image-layer callback. Checkpointed once via onDragCheckpoint at drag-start, same as onInstanceMoved. */
+  onInstanceResized: (instanceId: string, rect: { x: number; y: number; width: number; height: number }) => void
   /** relativeOffset is world-space, relative to the instance origin (not yet rotation-compensated). */
   onRoleMoved: (instanceId: string, role: Suffix, relativeOffset: Point) => void
   /**
@@ -168,6 +170,7 @@ type DragMode =
   | 'move-leader-line-point'
   | 'move-layer'
   | 'resize-layer'
+  | 'resize-instance'
 
 type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se'
 export type PipeEndpointSide = 'from' | 'to'
@@ -228,6 +231,10 @@ export class SvgCanvas {
   private dragLayerStartRect: Point = { x: 0, y: 0 }
   private dragResizeHandle: ResizeHandle | null = null
   private dragResizeStartRect: { x: number; y: number; width: number; height: number } = { x: 0, y: 0, width: 0, height: 0 }
+  private dragResizeInstanceId: string | null = null
+  private dragResizeStartSize: { width: number; height: number } = { width: 0, height: 0 }
+  /** Fixed for the whole resize-instance drag — a rotated box's opposite corner is anchored in its own local frame, not world axes, see onPointerMove's 'resize-instance' branch. */
+  private dragResizeStartTransform: { x: number; y: number; rotationDeg: number } = { x: 0, y: 0, rotationDeg: 0 }
   /** Shared with the width/height properties-panel fields via setAspectLocked; XOR'd with Shift at drag time. */
   private aspectLocked = true
   private boxSelectStartWorld: Point = { x: 0, y: 0 }
@@ -252,6 +259,7 @@ export class SvgCanvas {
   private leaderLineHandlesGroup: SVGGElement
   private companionPointsGroup: SVGGElement
   private layerResizeHandlesGroup: SVGGElement
+  private instanceResizeHandlesGroup: SVGGElement
   private alignGuideGroup: SVGGElement
   private latestInstances: ComponentInstance[] = []
   private latestPipes: PipeInstance[] = []
@@ -333,6 +341,10 @@ export class SvgCanvas {
     this.layerResizeHandlesGroup = document.createElementNS(SVG_NS, 'g')
     this.layerResizeHandlesGroup.setAttribute('class', 'gv-layer-resize-handles')
     this.overlayLayer.appendChild(this.layerResizeHandlesGroup)
+
+    this.instanceResizeHandlesGroup = document.createElementNS(SVG_NS, 'g')
+    this.instanceResizeHandlesGroup.setAttribute('class', 'gv-instance-resize-handles')
+    this.overlayLayer.appendChild(this.instanceResizeHandlesGroup)
 
     this.alignGuideGroup = document.createElementNS(SVG_NS, 'g')
     this.alignGuideGroup.setAttribute('class', 'gv-align-guides')
@@ -1187,6 +1199,30 @@ export class SvgCanvas {
     const leaderLineEl = target.closest('[data-leader-line-id]') as SVGElement | null
 
     if (resizeHandleEl) {
+      const resizeInstanceId = resizeHandleEl.getAttribute('data-resize-instance-id')
+      if (resizeInstanceId) {
+        const instance = this.latestInstances.find((i) => i.instanceId === resizeInstanceId)
+        const def = instance ? getComponentType(instance.componentTypeId) : null
+        if (instance && def?.resizable) {
+          this.callbacks.onDragCheckpoint()
+          this.dragMode = 'resize-instance'
+          this.dragResizeInstanceId = resizeInstanceId
+          this.dragResizeHandle = resizeHandleEl.getAttribute('data-resize-handle') as ResizeHandle
+          this.dragResizeStartTransform = { ...instance.transform }
+          let minX = Infinity
+          let minY = Infinity
+          let maxX = -Infinity
+          let maxY = -Infinity
+          for (const corner of resolveLocalBodyCorners(def, instance)) {
+            minX = Math.min(minX, corner.x)
+            maxX = Math.max(maxX, corner.x)
+            minY = Math.min(minY, corner.y)
+            maxY = Math.max(maxY, corner.y)
+          }
+          this.dragResizeStartSize = { width: maxX - minX, height: maxY - minY }
+        }
+        return
+      }
       const layerId = resizeHandleEl.getAttribute('data-layer-id')!
       const layer = this.latestLayers.find((l) => l.layerId === layerId)
       if (layer && layer.kind === 'image') {
@@ -1456,6 +1492,50 @@ export class SvgCanvas {
       return
     }
 
+    if (this.dragMode === 'resize-instance' && this.dragResizeInstanceId && this.dragResizeHandle) {
+      const instance = this.latestInstances.find((i) => i.instanceId === this.dragResizeInstanceId)
+      const def = instance ? getComponentType(instance.componentTypeId) : null
+      if (instance && def?.resizable) {
+        const world = this.screenToWorld(evt.clientX, evt.clientY)
+        const snapped = this.snapToGrid(world)
+        const { x: startX, y: startY, rotationDeg } = this.dragResizeStartTransform
+        const startSize = this.dragResizeStartSize
+        const handle = this.dragResizeHandle
+
+        // Un-rotate the cursor into the box's own local frame — the corner
+        // opposite the one being dragged is anchored in that local frame,
+        // not world axes, so a rotated box resizes without skewing.
+        const localCursor = rotatePoint({ x: snapped.x - startX, y: snapped.y - startY }, -rotationDeg)
+        const anchorLocal = {
+          x: handle.includes('w') ? startSize.width : 0,
+          y: handle.includes('n') ? startSize.height : 0,
+        }
+        const minSize = def.resizable.minSize(instance)
+        const newWidth = Math.max(minSize.width, Math.abs(localCursor.x - anchorLocal.x))
+        const newHeight = Math.max(minSize.height, Math.abs(localCursor.y - anchorLocal.y))
+
+        // The origin (the box's own local (0,0)/nw corner) only moves when
+        // the anchor isn't already local (0,0) — for the 'se' handle both
+        // offsets below are zero, so the origin stays put with no special case.
+        const originOffsetLocal = {
+          x: handle.includes('w') ? -newWidth : 0,
+          y: handle.includes('n') ? -newHeight : 0,
+        }
+        const anchorWorld = {
+          x: startX + rotatePoint(anchorLocal, rotationDeg).x,
+          y: startY + rotatePoint(anchorLocal, rotationDeg).y,
+        }
+        const rotatedOffset = rotatePoint(originOffsetLocal, rotationDeg)
+        this.callbacks.onInstanceResized(instance.instanceId, {
+          x: anchorWorld.x + rotatedOffset.x,
+          y: anchorWorld.y + rotatedOffset.y,
+          width: newWidth,
+          height: newHeight,
+        })
+      }
+      return
+    }
+
     if (this.tool === 'draw-pipe' && this.pipeDraft) {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
       const { point, guideX, guideY } = this.computeDrawPipeTarget(world, evt.shiftKey)
@@ -1643,6 +1723,7 @@ export class SvgCanvas {
     this.dragLeaderLinePoint = null
     this.dragLayerId = null
     this.dragResizeHandle = null
+    this.dragResizeInstanceId = null
   }
 
   private showBoxSelectRect(a: Point, b: Point) {
@@ -1806,6 +1887,7 @@ export class SvgCanvas {
     this.selectedInstanceIds = instanceIds
     this.drawSelectionConnectors()
     this.refreshDragHandles()
+    this.refreshInstanceResizeHandles()
   }
 
   /**
@@ -2109,6 +2191,61 @@ export class SvgCanvas {
   }
 
   /**
+   * Corner drag-handles on the selected instance, only when exactly one is
+   * selected and its type opted into manual resizing (def.resizable — see
+   * registry.ts). Unlike the axis-aligned image-layer handles above, these
+   * sit at the box's actual *rotated* corners (rotate each local corner by
+   * rotationDeg, translate by transform.x/y — same technique refreshDragHandles
+   * uses for its bbox-center handle) since a resizable instance can rotate.
+   */
+  private refreshInstanceResizeHandles() {
+    while (this.instanceResizeHandlesGroup.firstChild) {
+      this.instanceResizeHandlesGroup.removeChild(this.instanceResizeHandlesGroup.firstChild)
+    }
+    if (this.selectedInstanceIds.length !== 1) return
+    const instance = this.latestInstances.find((i) => i.instanceId === this.selectedInstanceIds[0])
+    if (!instance) return
+    const def = getComponentType(instance.componentTypeId)
+    if (!def.resizable) return
+
+    const { x, y, rotationDeg } = instance.transform
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const corner of resolveLocalBodyCorners(def, instance)) {
+      minX = Math.min(minX, corner.x)
+      maxX = Math.max(maxX, corner.x)
+      minY = Math.min(minY, corner.y)
+      maxY = Math.max(maxY, corner.y)
+    }
+    if (!Number.isFinite(minX)) return
+
+    const localCorners: { handle: ResizeHandle; local: Point; cursor: string }[] = [
+      { handle: 'nw', local: { x: minX, y: minY }, cursor: 'nwse-resize' },
+      { handle: 'ne', local: { x: maxX, y: minY }, cursor: 'nesw-resize' },
+      { handle: 'sw', local: { x: minX, y: maxY }, cursor: 'nesw-resize' },
+      { handle: 'se', local: { x: maxX, y: maxY }, cursor: 'nwse-resize' },
+    ]
+    const size = this.worldThreshold(10)
+    for (const c of localCorners) {
+      const rotated = rotatePoint(c.local, rotationDeg)
+      const worldX = x + rotated.x
+      const worldY = y + rotated.y
+      const rect = document.createElementNS(SVG_NS, 'rect')
+      rect.setAttribute('x', String(worldX - size / 2))
+      rect.setAttribute('y', String(worldY - size / 2))
+      rect.setAttribute('width', String(size))
+      rect.setAttribute('height', String(size))
+      rect.setAttribute('class', 'gv-instance-resize-handle')
+      rect.setAttribute('data-resize-instance-id', instance.instanceId)
+      rect.setAttribute('data-resize-handle', c.handle)
+      rect.style.cursor = c.cursor
+      this.instanceResizeHandlesGroup.appendChild(rect)
+    }
+  }
+
+  /**
    * Thin dashed lines from each selected instance's origin to its enabled
    * name/value/setpoint labels — the link stays visible even after a label
    * has been dragged away from its default position (see onRoleMoved).
@@ -2182,6 +2319,7 @@ export class SvgCanvas {
     }
     this.drawSelectionConnectors()
     this.refreshDragHandles()
+    this.refreshInstanceResizeHandles()
     this.refreshPortMarkers()
   }
 

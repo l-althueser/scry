@@ -13,9 +13,11 @@ import type { ComponentInstance, Port, RoleInstance } from '@svg-editor/shared'
 export interface InstanceOptionDescriptor {
   /** Key into ComponentInstance.propertyValues. */
   key: string
-  kind: 'boolean' | 'color' | 'text'
+  kind: 'boolean' | 'color' | 'text' | 'select'
   label: string
   default: boolean | string
+  /** Only used when kind === 'select'. */
+  options?: { value: string; label: string }[]
 }
 
 /**
@@ -60,6 +62,18 @@ export interface ComponentTypeDef {
   getPorts?: (instance: ComponentInstance) => Port[]
   /** Per-instance customizations this type exposes (mirror, fill color, optional decorative extras, ...) — see InstanceOptionDescriptor. Absent/empty for types that don't offer any (the common case). */
   instanceOptions?: InstanceOptionDescriptor[]
+  /**
+   * Opts a type into manual corner-drag resizing on the canvas (SvgCanvas's
+   * resize-instance handles). minSize is the type's own floor — e.g.
+   * equipment-box's text-driven minimum — that a manual override (read from/
+   * written to propertyValues[widthKey]/[heightKey]) is clamped to, never
+   * shrunk below.
+   */
+  resizable?: {
+    minSize: (instance: ComponentInstance) => { width: number; height: number }
+    widthKey: string
+    heightKey: string
+  }
   /**
    * The local x a `mirrored: true` instance flips its body (and ports)
    * around — the shape's own visual center, NOT necessarily 0/the

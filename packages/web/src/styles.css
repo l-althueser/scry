@@ -566,6 +566,12 @@ body {
   stroke-width: 1.5;
 }
 
+.gv-instance-resize-handle {
+  fill: #ffffff;
+  stroke: #3b82f6;
+  stroke-width: 1.5;
+}
+
 .gv-align-guide {
   stroke: #f59e0b;
   stroke-width: 1;

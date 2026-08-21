@@ -341,6 +341,8 @@ interface ProjectState {
 
   addInstance: (componentTypeId: string, pos: Point, keepPlacing?: boolean) => void
   moveInstance: (instanceId: string, pos: Point) => void
+  /** Continuous drag from a canvas resize-instance handle — see moveInstance/resizeImageLayer for the analogous no-history-per-frame pattern. */
+  resizeInstance: (instanceId: string, rect: { x: number; y: number; width: number; height: number }) => void
   deleteInstance: (instanceId: string) => void
   deleteInstances: (instanceIds: string[]) => void
   rotateInstance: (instanceId: string, deltaDeg: number) => void
@@ -552,6 +554,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           ? { ...inst, transform: { ...inst.transform, x: pos.x, y: pos.y } }
           : inst,
       ),
+    })),
+
+  resizeInstance: (instanceId, rect) =>
+    set((state) => ({
+      instances: state.instances.map((inst) => {
+        if (inst.instanceId !== instanceId) return inst
+        const resizable = getComponentType(inst.componentTypeId).resizable
+        if (!resizable) return inst
+        return {
+          ...inst,
+          transform: { ...inst.transform, x: rect.x, y: rect.y },
+          propertyValues: {
+            ...inst.propertyValues,
+            [resizable.widthKey]: rect.width,
+            [resizable.heightKey]: rect.height,
+          },
+        }
+      }),
     })),
 
   deleteInstance: (instanceId) =>
