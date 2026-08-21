@@ -465,18 +465,25 @@ export class SvgCanvas {
   /**
    * All ports (across every instance) and pipe points (endpoints + waypoints,
    * across every pipe, plus the in-progress draft) that a dragged/drawn pipe
-   * point can align to. excludeWaypoint skips the point currently being
-   * dragged so it doesn't trivially "align" with itself.
+   * point — or a dragged instance's own ports, see instancePortWorldPositions
+   * — can align to. excludeWaypoint skips the point currently being dragged;
+   * excludeInstanceIds skips a dragged instance's (stale, pre-drag) own ports,
+   * so neither trivially "aligns" with itself.
    */
-  private collectAlignReferences(excludeWaypoint?: { pipeId: string; index: number }): Point[] {
+  private collectAlignReferences(opts?: {
+    excludeWaypoint?: { pipeId: string; index: number }
+    excludeInstanceIds?: ReadonlySet<string>
+  }): Point[] {
     const refs: Point[] = []
     for (const inst of this.latestInstances) {
+      if (opts?.excludeInstanceIds?.has(inst.instanceId)) continue
       const def = getComponentType(inst.componentTypeId)
       for (const port of resolvePorts(def, inst)) {
         const pos = getPortWorldPosition(inst, port.portId)
         if (pos) refs.push(pos)
       }
     }
+    const excludeWaypoint = opts?.excludeWaypoint
     for (const pipe of this.latestPipes) {
       const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
       if (!points) continue
@@ -541,6 +548,50 @@ export class SvgCanvas {
       guideX: aligned.guideX,
       guideY: aligned.guideY,
     }
+  }
+
+  /**
+   * Same nearest-match-per-axis rule as snapWithAlignment, generalized from a
+   * single dragged point to a set of candidate points (e.g. every port of a
+   * dragged instance) — used so a whole component aligns via whichever of its
+   * own ports lands nearest a reference, not just its raw origin. Returns a
+   * correction (ref value minus candidate value) per axis rather than an
+   * absolute position, since the caller applies it to different things
+   * (an instance origin vs. a shared group-drag delta).
+   */
+  private bestAxisAlignment(
+    candidates: Point[],
+    refs: Point[],
+  ): { correctionX: number | null; correctionY: number | null; guideX: number | null; guideY: number | null } {
+    const threshold = this.worldThreshold(ALIGN_SNAP_PX)
+    let bestX: { value: number; dist: number; candidate: number } | null = null
+    let bestY: { value: number; dist: number; candidate: number } | null = null
+    for (const c of candidates) {
+      for (const ref of refs) {
+        const dx = Math.abs(ref.x - c.x)
+        if (dx <= threshold && (!bestX || dx < bestX.dist)) bestX = { value: ref.x, dist: dx, candidate: c.x }
+        const dy = Math.abs(ref.y - c.y)
+        if (dy <= threshold && (!bestY || dy < bestY.dist)) bestY = { value: ref.y, dist: dy, candidate: c.y }
+      }
+    }
+    return {
+      correctionX: bestX ? bestX.value - bestX.candidate : null,
+      correctionY: bestY ? bestY.value - bestY.candidate : null,
+      guideX: bestX ? bestX.value : null,
+      guideY: bestY ? bestY.value : null,
+    }
+  }
+
+  /** World positions of every port `instance` would have if its origin were `atOrigin` — lets alignment be evaluated at a not-yet-committed drag position without touching the real instance/store. */
+  private instancePortWorldPositions(instance: ComponentInstance, atOrigin: Point): Point[] {
+    const def = getComponentType(instance.componentTypeId)
+    const tentative: ComponentInstance = { ...instance, transform: { ...instance.transform, x: atOrigin.x, y: atOrigin.y } }
+    const positions: Point[] = []
+    for (const port of resolvePorts(def, instance)) {
+      const pos = getPortWorldPosition(tentative, port.portId)
+      if (pos) positions.push(pos)
+    }
+    return positions
   }
 
   private showAlignGuides(guideX: number | null, guideY: number | null) {
@@ -1429,7 +1480,9 @@ export class SvgCanvas {
           y: this.dragWaypointStartWorld.y + delta.y,
         })
       } else {
-        const refs = this.collectAlignReferences({ pipeId: this.dragPipeId, index: this.dragWaypointIndex })
+        const refs = this.collectAlignReferences({
+          excludeWaypoint: { pipeId: this.dragPipeId, index: this.dragWaypointIndex },
+        })
         const aligned = this.snapWithAlignmentOrGrid(world, refs)
         target = aligned.point
         guideX = aligned.guideX
@@ -1468,13 +1521,27 @@ export class SvgCanvas {
 
     if (this.dragMode === 'move-instance' && this.dragInstanceId) {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
-      let snapped = this.snapToGrid(world)
+      let snapped: Point
       if (evt.shiftKey) {
+        const gridSnapped = this.snapToGrid(world)
         const delta = this.constrainDeltaToAxis({
-          x: snapped.x - this.dragInstanceStartPos.x,
-          y: snapped.y - this.dragInstanceStartPos.y,
+          x: gridSnapped.x - this.dragInstanceStartPos.x,
+          y: gridSnapped.y - this.dragInstanceStartPos.y,
         })
         snapped = { x: this.dragInstanceStartPos.x + delta.x, y: this.dragInstanceStartPos.y + delta.y }
+        this.hideAlignGuides()
+      } else {
+        const instance = this.latestInstances.find((i) => i.instanceId === this.dragInstanceId)
+        const refs = this.collectAlignReferences({ excludeInstanceIds: new Set([this.dragInstanceId]) })
+        const candidates = instance ? this.instancePortWorldPositions(instance, world) : []
+        const { correctionX, correctionY, guideX, guideY } = this.bestAxisAlignment(candidates, refs)
+        const gridSnapped = this.snapToGrid(world)
+        snapped = {
+          x: correctionX !== null ? world.x + correctionX : gridSnapped.x,
+          y: correctionY !== null ? world.y + correctionY : gridSnapped.y,
+        }
+        if (guideX !== null || guideY !== null) this.showAlignGuides(guideX, guideY)
+        else this.hideAlignGuides()
       }
       this.callbacks.onInstanceMoved(this.dragInstanceId, snapped)
       return
@@ -1502,7 +1569,28 @@ export class SvgCanvas {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
       const rawDelta = { x: world.x - this.groupDragStartWorld.x, y: world.y - this.groupDragStartWorld.y }
       const delta = evt.shiftKey ? this.constrainDeltaToAxis(rawDelta) : rawDelta
-      this.callbacks.onGroupDragMove(this.snapToGrid(delta))
+      let snappedDelta: Point
+      if (evt.shiftKey) {
+        snappedDelta = this.snapToGrid(delta)
+        this.hideAlignGuides()
+      } else {
+        const selected = new Set(this.selectedInstanceIds)
+        const groupInstances = this.latestInstances.filter((i) => selected.has(i.instanceId))
+        const excludeIds = new Set(groupInstances.map((i) => i.instanceId))
+        const refs = this.collectAlignReferences({ excludeInstanceIds: excludeIds })
+        const candidates = groupInstances.flatMap((inst) =>
+          this.instancePortWorldPositions(inst, { x: inst.transform.x + delta.x, y: inst.transform.y + delta.y }),
+        )
+        const { correctionX, correctionY, guideX, guideY } = this.bestAxisAlignment(candidates, refs)
+        const gridDelta = this.snapToGrid(delta)
+        snappedDelta = {
+          x: correctionX !== null ? delta.x + correctionX : gridDelta.x,
+          y: correctionY !== null ? delta.y + correctionY : gridDelta.y,
+        }
+        if (guideX !== null || guideY !== null) this.showAlignGuides(guideX, guideY)
+        else this.hideAlignGuides()
+      }
+      this.callbacks.onGroupDragMove(snappedDelta)
       return
     }
 
