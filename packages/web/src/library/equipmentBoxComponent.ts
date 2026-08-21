@@ -3,6 +3,7 @@ import {
   LABEL_BOX_HEIGHT,
   LABEL_BOX_WIDTH,
   NAME_TEXT_BASELINE_Y,
+  PLACEHOLDER_ROLE_TEXT,
   SVG_NS,
   applyRoleBoxStyling,
   createLabelBoxElement,
@@ -198,7 +199,7 @@ function boxCorners(width: number, height: number): { x: number; y: number }[] {
  * that point. A tall multi-line box can end up visually close to its labels;
  * dragging a role (already supported for every type) repositions it by hand.
  */
-const LABEL_START_Y = MIN_HEIGHT + 12
+const LABEL_START_Y = MIN_HEIGHT + 5
 const LABEL_ROW_HEIGHT = 20
 
 function bodyFillColor(instance: ComponentInstance): string {
@@ -412,7 +413,7 @@ function update(group: SVGGElement, instance: ComponentInstance) {
 
     const roleText = el.querySelector('text')
     if (!roleText) continue
-    roleText.textContent = role.role === 'name' ? instance.tag : 'waiting ...'
+    roleText.textContent = role.role === 'name' ? instance.tag : PLACEHOLDER_ROLE_TEXT
   }
 }
 
@@ -472,7 +473,7 @@ function exportInstance(instance: ComponentInstance): string[] {
     const abs = rotatePoint(role.offset, rotationDeg)
     const labelX = x + abs.x
     const labelY = y + abs.y
-    const roleText = role.role === 'name' ? tag : 'waiting ...'
+    const roleText = role.role === 'name' ? tag : PLACEHOLDER_ROLE_TEXT
 
     lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
     if (role.role === 'value' || role.role === 'setpoint') {

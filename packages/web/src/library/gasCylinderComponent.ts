@@ -35,7 +35,10 @@ registerIconComponentType({
   ],
   ports: [{ portId: 'out', x: -4, y: 4, exitAngleDeg: 180 }],
   centerX: 10,
-  labelStartY: 58,
+  // 53, not tighter: the optional dewar extra (below) reaches down to y=54,
+  // so this still clears it — halving further would tuck the label under
+  // the dewar for anyone who enables that extra.
+  labelStartY: 53,
   defaultEnabled: { name: true, value: true },
   // The port sits on the left of the neck by default (matching the outline
   // above); mirroring flips both the drawn body and the port to the right.

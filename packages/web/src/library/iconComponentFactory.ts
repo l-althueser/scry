@@ -3,6 +3,7 @@ import {
   LABEL_BOX_HEIGHT,
   LABEL_BOX_WIDTH,
   NAME_TEXT_BASELINE_Y,
+  PLACEHOLDER_ROLE_TEXT,
   SVG_NS,
   applyRoleBoxStyling,
   createLabelBoxElement,
@@ -73,18 +74,16 @@ export interface IconComponentSpec {
   optionalExtras?: { propertyKey: string; label: string; shapes: PathShape[] }[]
 }
 
-const DEFAULT_LABEL_START_Y = 32
+const DEFAULT_LABEL_START_Y = 24
 const LABEL_ROW_HEIGHT = 20
 
 /**
  * Factory for the "icon-bodied inline device" pattern shared by every
  * component type that has a rotating body + ports (valve-like): a status
  * silhouette overlay, upright labels that stay clear of the body as it
- * rotates, and matching static export markup. Lets each new type
- * (compressor, gas cylinder, ...) be just geometry + a few defaults instead
- * of re-implementing render/update/export from scratch. valveComponent.ts
- * predates this factory and hand-implements the same pattern directly —
- * left as-is (it works, no need to touch it just to deduplicate further).
+ * rotates, and matching static export markup. Lets each type (valve,
+ * compressor, gas cylinder, ...) be just geometry + a few defaults instead
+ * of re-implementing render/update/export from scratch.
  */
 export function registerIconComponentType(spec: IconComponentSpec): void {
   const labelStartY = spec.labelStartY ?? DEFAULT_LABEL_START_Y
@@ -292,7 +291,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
 
       const text = el.querySelector('text')
       if (!text) continue
-      text.textContent = role.role === 'name' ? instance.tag : 'waiting ...'
+      text.textContent = role.role === 'name' ? instance.tag : PLACEHOLDER_ROLE_TEXT
     }
   }
 
@@ -352,7 +351,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       const abs = rotatePoint(role.offset, rotationDeg)
       const labelX = x + abs.x
       const labelY = y + abs.y
-      const text = role.role === 'name' ? tag : 'waiting ...'
+      const text = role.role === 'name' ? tag : PLACEHOLDER_ROLE_TEXT
 
       lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
       if (role.role === 'value' || role.role === 'setpoint') {

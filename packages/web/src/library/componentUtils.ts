@@ -5,6 +5,9 @@ export const SVG_NS = 'http://www.w3.org/2000/svg'
 /** name/value/setpoint are laid out relative to the icon/body, stacked in this order; indicator is never part of the stack. */
 export const LABEL_ROLE_ORDER: Suffix[] = ['name', 'value', 'setpoint']
 
+/** Editor-only placeholder shown for value/setpoint before Node-RED ever writes a real one — never exported/read as data, just a visual stand-in. Shared so every component type's preview text matches. */
+export const PLACEHOLDER_ROLE_TEXT = 'waiting ...'
+
 /**
  * Packs the enabled name/value/setpoint roles into a gap-free vertical
  * stack (value above setpoint when both are enabled — see LABEL_ROLE_ORDER),

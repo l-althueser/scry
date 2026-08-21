@@ -1,6 +1,7 @@
 import type { ComponentInstance, RoleInstance, Suffix } from '@svg-editor/shared'
 import {
   LABEL_ROLE_ORDER,
+  PLACEHOLDER_ROLE_TEXT,
   applyRoleBoxStyling,
   createLabelBoxElement,
   escapeXml,
@@ -62,7 +63,7 @@ function updateProcessIndicator(group: SVGGElement, instance: ComponentInstance)
 
     const text = el.querySelector('text')
     if (!text) continue
-    text.textContent = role.role === 'name' ? instance.tag : 'waiting ...'
+    text.textContent = role.role === 'name' ? instance.tag : PLACEHOLDER_ROLE_TEXT
   }
 }
 
@@ -83,7 +84,7 @@ function exportProcessIndicatorInstance(instance: ComponentInstance): string[] {
     const rotated = rotatePoint(role.offset, rotationDeg)
     const labelX = x + rotated.x
     const labelY = y + rotated.y
-    const text = role.role === 'name' ? tag : 'waiting ...'
+    const text = role.role === 'name' ? tag : PLACEHOLDER_ROLE_TEXT
 
     lines.push(
       `    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, rotationDeg + (role.rotationDeg ?? 0))}">`,

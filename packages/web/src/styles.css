@@ -441,7 +441,14 @@ body {
   border-top: 1px solid #ddd;
 }
 
-.gv-selected .gv-valve-outline path {
+/*
+ * .gv-valve-body-fill carries the main indicator-silhouette outline (the
+ * bowtie/circle/etc.), .gv-valve-outline the decorative extras (stems,
+ * blades, ticks) — both need to light up on selection, not just the extras,
+ * or e.g. a selected valve's actual body wouldn't highlight at all.
+ */
+.gv-selected .gv-valve-outline path,
+.gv-selected .gv-valve-body-fill path {
   stroke: #2563eb;
 }
 
