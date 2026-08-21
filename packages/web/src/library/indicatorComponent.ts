@@ -1,5 +1,15 @@
 import type { ComponentInstance, RoleInstance, Suffix } from '@svg-editor/shared'
-import { LABEL_ROLE_ORDER, createLabelBoxElement, escapeXml, fmt, labelBoxExportLines, packRoleOffsets, rotatePoint } from './componentUtils'
+import {
+  LABEL_ROLE_ORDER,
+  applyRoleBoxStyling,
+  createLabelBoxElement,
+  escapeXml,
+  fmt,
+  labelBoxExportLines,
+  packRoleOffsets,
+  roleTransformAttr,
+  rotatePoint,
+} from './componentUtils'
 import { registerComponentType } from './registry'
 
 export const PROCESS_INDICATOR_TYPE = 'process-indicator'
@@ -47,7 +57,8 @@ function updateProcessIndicator(group: SVGGElement, instance: ComponentInstance)
 
     el.style.display = role.enabled ? '' : 'none'
     el.id = `${instance.tag}_${role.role}`
-    el.setAttribute('transform', `translate(${role.offset.x},${role.offset.y})`)
+    el.setAttribute('transform', roleTransformAttr(role.offset, role.rotationDeg))
+    applyRoleBoxStyling(el, role)
 
     const text = el.querySelector('text')
     if (!text) continue
@@ -67,16 +78,23 @@ function exportProcessIndicatorInstance(instance: ComponentInstance): string[] {
 
     // Export is a flat static snapshot, so rotation is baked into both the
     // anchor position and the box's own orientation (the whole tag rotates
-    // as one rigid unit, unlike the valve's upright labels).
+    // as one rigid unit, unlike the valve's upright labels) — plus the
+    // label's own independent rotation on top of that.
     const rotated = rotatePoint(role.offset, rotationDeg)
     const labelX = x + rotated.x
     const labelY = y + rotated.y
     const text = role.role === 'name' ? tag : 'waiting ...'
 
     lines.push(
-      `    <g id="${tag}_${role.role}" transform="translate(${fmt(labelX)},${fmt(labelY)}) rotate(${fmt(rotationDeg)})">`,
+      `    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, rotationDeg + (role.rotationDeg ?? 0))}">`,
     )
-    lines.push(...labelBoxExportLines('      ', role.role, text))
+    lines.push(
+      ...labelBoxExportLines('      ', role.role, text, {
+        fill: role.fillColor,
+        stroke: role.strokeColor,
+        textColor: role.textColor,
+      }),
+    )
     lines.push(`    </g>`)
   }
 

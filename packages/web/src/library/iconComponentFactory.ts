@@ -4,11 +4,13 @@ import {
   LABEL_BOX_WIDTH,
   NAME_TEXT_BASELINE_Y,
   SVG_NS,
+  applyRoleBoxStyling,
   createLabelBoxElement,
   escapeXml,
   fmt,
   labelBoxExportLines,
   packRoleOffsets,
+  roleTransformAttr,
   rotatePoint,
 } from './componentUtils'
 import { registerComponentType, type InstanceOptionDescriptor } from './registry'
@@ -235,12 +237,17 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     nameHitArea.setAttribute('width', String(LABEL_BOX_WIDTH))
     nameHitArea.setAttribute('height', String(LABEL_BOX_HEIGHT))
     nameHitArea.setAttribute('fill', 'transparent')
+    nameHitArea.setAttribute('stroke', 'transparent')
+    nameHitArea.setAttribute('stroke-width', '1')
+    nameHitArea.dataset.defaultFill = 'transparent'
+    nameHitArea.dataset.defaultStroke = 'transparent'
     nameGroup.appendChild(nameHitArea)
 
     const nameText = document.createElementNS(SVG_NS, 'text')
     nameText.setAttribute('x', '0')
     nameText.setAttribute('y', String(NAME_TEXT_BASELINE_Y))
     nameText.setAttribute('text-anchor', 'middle')
+    nameText.setAttribute('dominant-baseline', 'central')
     nameText.setAttribute('font-family', 'Arial')
     nameText.setAttribute('font-size', '10')
     nameGroup.appendChild(nameText)
@@ -280,7 +287,8 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       el.style.display = role.enabled ? '' : 'none'
       el.id = `${instance.tag}_${role.role}`
       const rotated = rotatePoint(role.offset, rotationDeg)
-      el.setAttribute('transform', `translate(${rotated.x},${rotated.y})`)
+      el.setAttribute('transform', roleTransformAttr(rotated, role.rotationDeg))
+      applyRoleBoxStyling(el, role)
 
       const text = el.querySelector('text')
       if (!text) continue
@@ -346,12 +354,26 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       const labelY = y + abs.y
       const text = role.role === 'name' ? tag : 'waiting ...'
 
-      lines.push(`    <g id="${tag}_${role.role}" transform="translate(${fmt(labelX)},${fmt(labelY)})">`)
+      lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
       if (role.role === 'value' || role.role === 'setpoint') {
-        lines.push(...labelBoxExportLines('      ', role.role, text))
+        lines.push(
+          ...labelBoxExportLines('      ', role.role, text, {
+            fill: role.fillColor,
+            stroke: role.strokeColor,
+            textColor: role.textColor,
+          }),
+        )
+      } else if (role.fillColor || role.strokeColor) {
+        lines.push(
+          ...labelBoxExportLines('      ', role.role, text, {
+            fill: role.fillColor ?? 'transparent',
+            stroke: role.strokeColor ?? 'transparent',
+            textColor: role.textColor,
+          }),
+        )
       } else {
         lines.push(
-          `      <text x="0" y="${NAME_TEXT_BASELINE_Y}" text-anchor="middle" font-family="Arial" font-size="10" fill="#000000">${escapeXml(text)}</text>`,
+          `      <text x="0" y="${NAME_TEXT_BASELINE_Y}" text-anchor="middle" dominant-baseline="central" font-family="Arial" font-size="10" fill="${role.textColor ?? '#000000'}">${escapeXml(text)}</text>`,
         )
       }
       lines.push(`    </g>`)

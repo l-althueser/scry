@@ -31,6 +31,14 @@ export interface RoleInstance {
    * placed label stays put instead of jumping when a sibling is toggled.
    */
   manuallyPositioned?: boolean
+  /** Independent spin around the label's own anchor, applied on top of the parent instance's rotation. */
+  rotationDeg?: number
+  /** Background color override, or the literal 'transparent'. null resets to the type default (transparent for `name` in most component types, since it renders as bare text by default). */
+  fillColor?: string | null
+  /** Border color override, or the literal 'transparent'. null resets to the type default. */
+  strokeColor?: string | null
+  /** Text color override — applies to all three label roles. null resets to the default. */
+  textColor?: string | null
 }
 
 export interface ComponentInstance {

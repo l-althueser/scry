@@ -35,6 +35,11 @@ export function packRoleOffsets(
   })
 }
 
+/** The transform for a positioned role group: translate into place, then spin the label around its own anchor by its own (independent of the parent's) rotation. */
+export function roleTransformAttr(offset: { x: number; y: number }, rotationDeg: number | undefined): string {
+  return `translate(${fmt(offset.x)},${fmt(offset.y)}) rotate(${fmt(rotationDeg ?? 0)})`
+}
+
 export function rotatePoint(pt: { x: number; y: number }, deg: number): { x: number; y: number } {
   const rad = (deg * Math.PI) / 180
   const cos = Math.cos(rad)
@@ -47,14 +52,17 @@ export const LABEL_BOX_HEIGHT = 16
 
 /**
  * The "name" role renders as bare text (no box), unlike value/setpoint —
- * but its text still needs to sit at this same baseline y within its row
- * (matching where text sits inside a LABEL_BOX_HEIGHT-tall box) so that
- * name-to-value spacing looks the same as value-to-setpoint spacing. A
- * plain text element with y=0 would put its baseline (and so the visible
- * glyphs, which grow upward from there) right at the top of the row instead
- * — visually a much bigger gap to whatever role is packed below it.
+ * but its text still needs to sit at this same vertical anchor within its
+ * row (matching where text sits inside a LABEL_BOX_HEIGHT-tall box) so that
+ * name-to-value spacing looks the same as value-to-setpoint spacing.
+ * Paired with `dominant-baseline="central"` (see createLabelBoxElement /
+ * labelBoxExportLines) rather than a hand-picked baseline offset — a fixed
+ * offset only centers one specific font-size, and was consistently off by
+ * ~0.5px here since name (font-size 10) and value/setpoint (font-size 9)
+ * shared one constant. `dominant-baseline: central` centers correctly for
+ * any font size/string, verified against getBBox() for every role.
  */
-export const NAME_TEXT_BASELINE_Y = LABEL_BOX_HEIGHT / 2 + 3
+export const NAME_TEXT_BASELINE_Y = LABEL_BOX_HEIGHT / 2
 
 /** Roles rendered as a filled box + text, styled after Templates.svg's IND000_value/IND000_setpoint. */
 export const BOX_ROLE_FILL: Partial<Record<string, string>> = {
@@ -81,13 +89,36 @@ export function createLabelBoxElement(role: string): SVGGElement {
 
   const text = document.createElementNS(SVG_NS, 'text')
   text.setAttribute('x', '0')
-  text.setAttribute('y', String(LABEL_BOX_HEIGHT / 2 + 3))
+  text.setAttribute('y', String(LABEL_BOX_HEIGHT / 2))
   text.setAttribute('text-anchor', 'middle')
+  text.setAttribute('dominant-baseline', 'central')
   text.setAttribute('font-family', 'Arial')
   text.setAttribute('font-size', '9')
   g.appendChild(text)
 
   return g
+}
+
+/**
+ * Applies a role's color overrides (background/border/text) onto its
+ * already-built DOM. Falls back to the rect's own `data-default-fill` /
+ * `data-default-stroke` (set at creation time) when a field is unset, or to
+ * BOX_ROLE_FILL/black if the rect didn't specify one — this is how `name`'s
+ * click-target rect (invisible by default in most types, see e.g.
+ * valveComponent's `nameHitArea`) stays transparent until the user actually
+ * picks a color for it, while still remaining paintable (unlike the old
+ * "skip if currently transparent" check, which locked it invisible forever).
+ */
+export function applyRoleBoxStyling(el: SVGGElement, role: RoleInstance): void {
+  const rect = el.querySelector('rect')
+  if (rect) {
+    const defaultFill = rect.dataset.defaultFill ?? BOX_ROLE_FILL[role.role] ?? '#ffffff'
+    const defaultStroke = rect.dataset.defaultStroke ?? '#000000'
+    rect.setAttribute('fill', role.fillColor ?? defaultFill)
+    rect.setAttribute('stroke', role.strokeColor ?? defaultStroke)
+  }
+  const text = el.querySelector('text')
+  if (text) text.setAttribute('fill', role.textColor ?? '#000000')
 }
 
 export function fmt(n: number): string {
@@ -98,11 +129,18 @@ export function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** Export markup for one box+text label role, matching createLabelBoxElement's appearance. */
-export function labelBoxExportLines(indent: string, role: string, text: string): string[] {
-  const fill = BOX_ROLE_FILL[role] ?? '#ffffff'
+/** Export markup for one box+text label role, matching createLabelBoxElement's appearance — colors default to the same values it/applyRoleBoxStyling use when not overridden. */
+export function labelBoxExportLines(
+  indent: string,
+  role: string,
+  text: string,
+  colors?: { fill?: string | null; stroke?: string | null; textColor?: string | null },
+): string[] {
+  const fill = colors?.fill ?? BOX_ROLE_FILL[role] ?? '#ffffff'
+  const stroke = colors?.stroke ?? '#000000'
+  const textColor = colors?.textColor ?? '#000000'
   return [
-    `${indent}<rect x="${-LABEL_BOX_WIDTH / 2}" y="0" width="${LABEL_BOX_WIDTH}" height="${LABEL_BOX_HEIGHT}" fill="${fill}" stroke="#000000" stroke-width="1" />`,
-    `${indent}<text x="0" y="${LABEL_BOX_HEIGHT / 2 + 3}" text-anchor="middle" font-family="Arial" font-size="9" fill="#000000">${escapeXml(text)}</text>`,
+    `${indent}<rect x="${-LABEL_BOX_WIDTH / 2}" y="0" width="${LABEL_BOX_WIDTH}" height="${LABEL_BOX_HEIGHT}" fill="${fill}" stroke="${stroke}" stroke-width="1" />`,
+    `${indent}<text x="0" y="${LABEL_BOX_HEIGHT / 2}" text-anchor="middle" dominant-baseline="central" font-family="Arial" font-size="9" fill="${textColor}">${escapeXml(text)}</text>`,
   ]
 }

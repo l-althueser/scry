@@ -4,13 +4,47 @@ import {
   computeCrossingsForPipe,
   getDisplayPoints,
   getPipePoints,
+  PIPE_DEFAULT_COLOR,
+  PIPE_NON_CLICKABLE_COLOR,
   resolveIndicatorTag,
-  resolvePipeColor,
   type Point,
 } from '../pipes/pipeGeometry'
 import { DEFAULT_FONT_SIZE } from '../shapes/freeShapeGeometry'
 import { loadImageFile } from '../import/loadImageFile'
-import { getComponentType } from '../library'
+import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint } from '../library'
+
+/** One color field, same single-line layout everywhere it's used: label + swatch + None + Default. `value` null/undefined means "at default". */
+function ColorPickerRow({
+  label,
+  value,
+  defaultValue,
+  onChange,
+}: {
+  label: string
+  value: string | null | undefined
+  defaultValue: string
+  onChange: (value: string | null) => void
+}) {
+  const isTransparent = value === 'transparent'
+  return (
+    <div className="field-row color-row">
+      <span className="color-row-label">{label}</span>
+      <input
+        type="color"
+        value={isTransparent ? defaultValue : (value ?? defaultValue)}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={isTransparent}
+        style={{ flex: '0 0 auto', width: '2rem', padding: 0 }}
+      />
+      <button onClick={() => onChange('transparent')} disabled={isTransparent}>
+        None
+      </button>
+      <button onClick={() => onChange(null)} disabled={value == null}>
+        Default
+      </button>
+    </div>
+  )
+}
 
 export function PropertiesPanel() {
   const selectedInstanceIds = useProjectStore((s) => s.selectedInstanceIds)
@@ -26,6 +60,10 @@ export function PropertiesPanel() {
   const renameInstance = useProjectStore((s) => s.renameInstance)
   const setRoleEnabled = useProjectStore((s) => s.setRoleEnabled)
   const setInstancePropertyValue = useProjectStore((s) => s.setInstancePropertyValue)
+  const setInstancePosition = useProjectStore((s) => s.setInstancePosition)
+  const setRolePosition = useProjectStore((s) => s.setRolePosition)
+  const setRoleRotation = useProjectStore((s) => s.setRoleRotation)
+  const setRoleColor = useProjectStore((s) => s.setRoleColor)
   const deleteInstance = useProjectStore((s) => s.deleteInstance)
   const deleteInstances = useProjectStore((s) => s.deleteInstances)
   const rotateInstance = useProjectStore((s) => s.rotateInstance)
@@ -156,75 +194,73 @@ export function PropertiesPanel() {
       <aside className="properties-panel">
         <h2>Pipe properties</h2>
 
-        <label className="field">
-          <span>Tag</span>
-          <input
-            value={pipeTagInput}
-            onChange={(e) => {
-              setPipeTagInput(e.target.value)
-              renamePipeTag(pipe.instanceId, e.target.value)
-            }}
-          />
-        </label>
-        {tagRenameError && <p className="field-error">{tagRenameError}</p>}
-
-        <label className="field">
-          <span>Volume</span>
-          <input
-            value={volumeTagInput}
-            onChange={(e) => {
-              setVolumeTagInput(e.target.value)
-              renameVolumeTag(pipe.instanceId, e.target.value)
-            }}
-          />
-        </label>
-        <p className="field-hint">
-          {volumeSiblings.length > 1
-            ? `Shared with ${volumeSiblings.length - 1} other connected pipe${volumeSiblings.length - 1 === 1 ? '' : 's'} (no valve/component in between) — gas fills this whole run at once, so they all share one "_indicator" id.`
-            : 'Not connected to any other pipe right now (a component, e.g. a valve, sits between it and everything else) — its own one-pipe volume.'}
-        </p>
-
-        <label className="role-checkbox">
-          <input
-            type="checkbox"
-            checked={pipe.indicatorEnabled}
-            onChange={(e) => setPipeIndicatorEnabled(pipe.instanceId, e.target.checked)}
-          />
-          clickable / colorable (_indicator)
-        </label>
-        <p className="field-hint">
-          {pipe.indicatorEnabled ? (
-            <>
-              Exports as <code>{resolveIndicatorTag(pipe)}_indicator</code> — a small dot at the
-              pipe&apos;s midpoint. Every indicator-enabled pipe in this volume shares that id, so
-              coloring it in Node-RED lights up the whole connected run.
-            </>
-          ) : (
-            "Currently just a decorative line — Node-RED can't target it."
-          )}
-        </p>
-
-        <label className="field">
-          <span>Line color</span>
-          <div className="field-row">
+        <fieldset className="field roles-field">
+          <legend>Identity</legend>
+          <label className="field">
+            <span>Tag</span>
             <input
-              type="color"
-              value={resolvePipeColor(pipe)}
-              onChange={(e) => setPipeColor(pipe.instanceId, e.target.value)}
-              style={{ flex: '0 0 auto', width: '2.5rem', padding: 0 }}
+              value={pipeTagInput}
+              onChange={(e) => {
+                setPipeTagInput(e.target.value)
+                renamePipeTag(pipe.instanceId, e.target.value)
+              }}
             />
-            <button onClick={() => setPipeColor(pipe.instanceId, null)} disabled={!pipe.strokeColor}>
-              Reset to default
-            </button>
-          </div>
-        </label>
-        <p className="field-hint">
-          {pipe.strokeColor
-            ? 'Custom color overrides the default.'
-            : pipe.indicatorEnabled
-              ? 'Default: black (indicator enabled).'
-              : 'Default: light gray (no indicator, purely decorative).'}
-        </p>
+          </label>
+          {tagRenameError && <p className="field-error">{tagRenameError}</p>}
+
+          <label className="field">
+            <span>Volume</span>
+            <input
+              value={volumeTagInput}
+              onChange={(e) => {
+                setVolumeTagInput(e.target.value)
+                renameVolumeTag(pipe.instanceId, e.target.value)
+              }}
+            />
+          </label>
+          <p className="field-hint">
+            {volumeSiblings.length > 1
+              ? `Shared with ${volumeSiblings.length - 1} other connected pipe${volumeSiblings.length - 1 === 1 ? '' : 's'} (no valve/component in between) — gas fills this whole run at once, so they all share one "_indicator" id.`
+              : 'Not connected to any other pipe right now (a component, e.g. a valve, sits between it and everything else) — its own one-pipe volume.'}
+          </p>
+        </fieldset>
+
+        <fieldset className="field roles-field">
+          <legend>Indicator &amp; color</legend>
+          <label className="role-checkbox">
+            <input
+              type="checkbox"
+              checked={pipe.indicatorEnabled}
+              onChange={(e) => setPipeIndicatorEnabled(pipe.instanceId, e.target.checked)}
+            />
+            clickable / colorable (_indicator)
+          </label>
+          <p className="field-hint">
+            {pipe.indicatorEnabled ? (
+              <>
+                Exports as <code>{resolveIndicatorTag(pipe)}_indicator</code> — a small dot at the
+                pipe&apos;s midpoint. Every indicator-enabled pipe in this volume shares that id, so
+                coloring it in Node-RED lights up the whole connected run.
+              </>
+            ) : (
+              "Currently just a decorative line — Node-RED can't target it."
+            )}
+          </p>
+
+          <ColorPickerRow
+            label="Line"
+            value={pipe.strokeColor}
+            defaultValue={pipe.indicatorEnabled ? PIPE_DEFAULT_COLOR : PIPE_NON_CLICKABLE_COLOR}
+            onChange={(v) => setPipeColor(pipe.instanceId, v)}
+          />
+          <p className="field-hint">
+            {pipe.strokeColor
+              ? 'Custom color overrides the default.'
+              : pipe.indicatorEnabled
+                ? 'Default: black (indicator enabled).'
+                : 'Default: light gray (no indicator, purely decorative).'}
+          </p>
+        </fieldset>
 
         <fieldset className="field roles-field">
           <legend>Routing</legend>
@@ -348,9 +384,10 @@ export function PropertiesPanel() {
         </p>
 
         {shape.kind === 'text' && (
-          <>
+          <fieldset className="field roles-field">
+            <legend>Text</legend>
             <label className="field">
-              <span>Text</span>
+              <span>Content</span>
               <textarea
                 rows={3}
                 value={shapeTextInput}
@@ -361,79 +398,81 @@ export function PropertiesPanel() {
               />
             </label>
             <p className="field-hint">Press Enter for a line break — multi-line text is fully supported.</p>
-            <label className="field">
-              <span>Font size</span>
-              <input
-                type="number"
-                min={6}
-                max={200}
-                value={shape.fontSize ?? DEFAULT_FONT_SIZE}
-                onChange={(e) => setShapeFontSize(shape.instanceId, Number(e.target.value) || DEFAULT_FONT_SIZE)}
-              />
-            </label>
-            <fieldset className="field roles-field">
-              <legend>Alignment</legend>
-              {(['left', 'center', 'right'] as const).map((align) => (
-                <label key={align} className="role-checkbox">
-                  <input
-                    type="radio"
-                    name="text-align"
-                    checked={(shape.textAlign ?? 'left') === align}
-                    onChange={() => setShapeTextAlign(shape.instanceId, align)}
-                  />
-                  {align}
-                </label>
-              ))}
-            </fieldset>
-          </>
-        )}
-
-        <label className="field">
-          <span>{shape.kind === 'text' ? 'Text color' : 'Stroke color'}</span>
-          <input
-            type="color"
-            value={shape.style.stroke}
-            onChange={(e) => setShapeStyle(shape.instanceId, { stroke: e.target.value })}
-            style={{ flex: '0 0 auto', width: '2.5rem', padding: 0 }}
-          />
-        </label>
-
-        {shape.kind !== 'line' && shape.kind !== 'text' && (
-          <>
-            <label className="role-checkbox">
-              <input
-                type="checkbox"
-                checked={shape.style.fill !== null}
-                onChange={(e) =>
-                  setShapeStyle(shape.instanceId, { fill: e.target.checked ? shape.style.stroke : null })
-                }
-              />
-              filled
-            </label>
-            {shape.style.fill !== null && (
+            <div className="field-row">
               <label className="field">
-                <span>Fill color</span>
+                <span>Font size</span>
                 <input
-                  type="color"
-                  value={shape.style.fill}
-                  onChange={(e) => setShapeStyle(shape.instanceId, { fill: e.target.value })}
-                  style={{ flex: '0 0 auto', width: '2.5rem', padding: 0 }}
+                  type="number"
+                  min={6}
+                  max={200}
+                  value={shape.fontSize ?? DEFAULT_FONT_SIZE}
+                  onChange={(e) => setShapeFontSize(shape.instanceId, Number(e.target.value) || DEFAULT_FONT_SIZE)}
                 />
               </label>
-            )}
-          </>
+              <label className="field">
+                <span>Align</span>
+                <select
+                  value={shape.textAlign ?? 'left'}
+                  onChange={(e) => setShapeTextAlign(shape.instanceId, e.target.value as 'left' | 'center' | 'right')}
+                >
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
         )}
 
-        <label className="field">
-          <span>Stroke width</span>
-          <input
-            type="number"
-            min={0}
-            max={40}
-            value={shape.style.strokeWidth}
-            onChange={(e) => setShapeStyle(shape.instanceId, { strokeWidth: Number(e.target.value) || 0 })}
-          />
-        </label>
+        <fieldset className="field roles-field">
+          <legend>Style</legend>
+          <div className="field-row color-row">
+            <span className="color-row-label">{shape.kind === 'text' ? 'Text' : 'Stroke'}</span>
+            <input
+              type="color"
+              value={shape.style.stroke}
+              onChange={(e) => setShapeStyle(shape.instanceId, { stroke: e.target.value })}
+              style={{ flex: '0 0 auto', width: '2rem', padding: 0 }}
+            />
+          </div>
+
+          {shape.kind !== 'line' && shape.kind !== 'text' && (
+            <>
+              <label className="role-checkbox">
+                <input
+                  type="checkbox"
+                  checked={shape.style.fill !== null}
+                  onChange={(e) =>
+                    setShapeStyle(shape.instanceId, { fill: e.target.checked ? shape.style.stroke : null })
+                  }
+                />
+                filled
+              </label>
+              {shape.style.fill !== null && (
+                <div className="field-row color-row">
+                  <span className="color-row-label">Fill</span>
+                  <input
+                    type="color"
+                    value={shape.style.fill}
+                    onChange={(e) => setShapeStyle(shape.instanceId, { fill: e.target.value })}
+                    style={{ flex: '0 0 auto', width: '2rem', padding: 0 }}
+                  />
+                </div>
+              )}
+            </>
+          )}
+
+          <label className="field">
+            <span>Stroke width</span>
+            <input
+              type="number"
+              min={0}
+              max={40}
+              value={shape.style.strokeWidth}
+              onChange={(e) => setShapeStyle(shape.instanceId, { strokeWidth: Number(e.target.value) || 0 })}
+            />
+          </label>
+        </fieldset>
 
         <p className="field-hint">Drag the shape on the canvas to move it (Shift locks to horizontal/vertical).</p>
 
@@ -508,119 +547,125 @@ export function PropertiesPanel() {
           />
         </label>
 
-        <label className="role-checkbox">
-          <input
-            type="checkbox"
-            checked={layer.locked}
-            onChange={(e) => setLayerLocked(layer.layerId, e.target.checked)}
-          />
-          locked
-        </label>
-        <p className="field-hint">
-          {layer.locked
-            ? "Dragging on the canvas is disabled while locked — untick this to reposition it there, or just edit X/Y/Width/Height below."
-            : 'Drag the image on the canvas to move it (Shift locks to horizontal/vertical).'}
-        </p>
-
-        <label className="role-checkbox">
-          <input
-            type="checkbox"
-            checked={layer.includeInExport}
-            onChange={(e) => setLayerIncludeInExport(layer.layerId, e.target.checked)}
-          />
-          include in exported SVG
-        </label>
-
-        <label className="field">
-          <span>Opacity ({Math.round(layer.opacity * 100)}%)</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={layer.opacity}
-            onPointerDown={() => checkpointHistory()}
-            onChange={(e) => setLayerOpacity(layer.layerId, Number(e.target.value))}
-          />
-        </label>
-
-        <label className="role-checkbox">
-          <input
-            type="checkbox"
-            checked={imageAspectLocked}
-            onChange={(e) => setImageAspectLocked(e.target.checked)}
-          />
-          lock aspect ratio
-        </label>
-        <p className="field-hint">
-          Also applies to the corner drag-handles on the canvas — hold Shift while dragging one to
-          temporarily flip this lock.
-        </p>
-
-        <div className="layer-rect-grid">
-          <label className="field">
-            <span>X</span>
+        <fieldset className="field roles-field">
+          <legend>Display</legend>
+          <label className="role-checkbox">
             <input
-              type="number"
-              value={layer.x}
-              onChange={(e) =>
-                setLayerRect(layer.layerId, {
-                  x: Number(e.target.value) || 0,
-                  y: layer.y,
-                  width: layer.width,
-                  height: layer.height,
-                })
-              }
+              type="checkbox"
+              checked={layer.locked}
+              onChange={(e) => setLayerLocked(layer.layerId, e.target.checked)}
+            />
+            locked
+          </label>
+          <p className="field-hint">
+            {layer.locked
+              ? "Dragging on the canvas is disabled while locked — untick this to reposition it there, or just edit X/Y/Width/Height below."
+              : 'Drag the image on the canvas to move it (Shift locks to horizontal/vertical).'}
+          </p>
+
+          <label className="role-checkbox">
+            <input
+              type="checkbox"
+              checked={layer.includeInExport}
+              onChange={(e) => setLayerIncludeInExport(layer.layerId, e.target.checked)}
+            />
+            include in exported SVG
+          </label>
+
+          <label className="field">
+            <span>Opacity ({Math.round(layer.opacity * 100)}%)</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={layer.opacity}
+              onPointerDown={() => checkpointHistory()}
+              onChange={(e) => setLayerOpacity(layer.layerId, Number(e.target.value))}
             />
           </label>
-          <label className="field">
-            <span>Y</span>
+        </fieldset>
+
+        <fieldset className="field roles-field">
+          <legend>Geometry</legend>
+          <label className="role-checkbox">
             <input
-              type="number"
-              value={layer.y}
-              onChange={(e) =>
-                setLayerRect(layer.layerId, {
-                  x: layer.x,
-                  y: Number(e.target.value) || 0,
-                  width: layer.width,
-                  height: layer.height,
-                })
-              }
+              type="checkbox"
+              checked={imageAspectLocked}
+              onChange={(e) => setImageAspectLocked(e.target.checked)}
             />
+            lock aspect ratio
           </label>
-          <label className="field">
-            <span>Width</span>
-            <input
-              type="number"
-              min={1}
-              value={layer.width}
-              onChange={(e) => {
-                const width = Math.max(1, Number(e.target.value) || 1)
-                const height =
-                  imageAspectLocked && layer.width > 0
-                    ? Math.max(1, Math.round((width * layer.height) / layer.width))
-                    : layer.height
-                setLayerRect(layer.layerId, { x: layer.x, y: layer.y, width, height })
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>Height</span>
-            <input
-              type="number"
-              min={1}
-              value={layer.height}
-              onChange={(e) => {
-                const height = Math.max(1, Number(e.target.value) || 1)
-                const width =
-                  imageAspectLocked && layer.height > 0
-                    ? Math.max(1, Math.round((height * layer.width) / layer.height))
-                    : layer.width
-                setLayerRect(layer.layerId, { x: layer.x, y: layer.y, width, height })
-              }}
-            />
-          </label>
-        </div>
+          <p className="field-hint">
+            Also applies to the corner drag-handles on the canvas — hold Shift while dragging one to
+            temporarily flip this lock.
+          </p>
+
+          <div className="layer-rect-grid">
+            <label className="field">
+              <span>X</span>
+              <input
+                type="number"
+                value={layer.x}
+                onChange={(e) =>
+                  setLayerRect(layer.layerId, {
+                    x: Number(e.target.value) || 0,
+                    y: layer.y,
+                    width: layer.width,
+                    height: layer.height,
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Y</span>
+              <input
+                type="number"
+                value={layer.y}
+                onChange={(e) =>
+                  setLayerRect(layer.layerId, {
+                    x: layer.x,
+                    y: Number(e.target.value) || 0,
+                    width: layer.width,
+                    height: layer.height,
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Width</span>
+              <input
+                type="number"
+                min={1}
+                value={layer.width}
+                onChange={(e) => {
+                  const width = Math.max(1, Number(e.target.value) || 1)
+                  const height =
+                    imageAspectLocked && layer.width > 0
+                      ? Math.max(1, Math.round((width * layer.height) / layer.width))
+                      : layer.height
+                  setLayerRect(layer.layerId, { x: layer.x, y: layer.y, width, height })
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Height</span>
+              <input
+                type="number"
+                min={1}
+                value={layer.height}
+                onChange={(e) => {
+                  const height = Math.max(1, Number(e.target.value) || 1)
+                  const width =
+                    imageAspectLocked && layer.height > 0
+                      ? Math.max(1, Math.round((height * layer.width) / layer.height))
+                      : layer.width
+                  setLayerRect(layer.layerId, { x: layer.x, y: layer.y, width, height })
+                }}
+              />
+            </label>
+          </div>
+        </fieldset>
 
         <fieldset className="field roles-field">
           <legend>Connection points ({layer.connectionPoints.length})</legend>
@@ -760,17 +805,43 @@ export function PropertiesPanel() {
     <aside className="properties-panel">
       <h2>Properties</h2>
 
-      <label className="field">
-        <span>Tag</span>
-        <input
-          value={tagInput}
-          onChange={(e) => {
-            setTagInput(e.target.value)
-            renameInstance(instance.instanceId, e.target.value)
-          }}
-        />
-      </label>
-      {tagRenameError && <p className="field-error">{tagRenameError}</p>}
+      <fieldset className="field roles-field">
+        <legend>Identity</legend>
+        <label className="field">
+          <span>Tag</span>
+          <input
+            value={tagInput}
+            onChange={(e) => {
+              setTagInput(e.target.value)
+              renameInstance(instance.instanceId, e.target.value)
+            }}
+          />
+        </label>
+        {tagRenameError && <p className="field-error">{tagRenameError}</p>}
+
+        <div className="field-row">
+          <label className="field">
+            <span>X</span>
+            <input
+              type="number"
+              value={instance.transform.x}
+              onChange={(e) =>
+                setInstancePosition(instance.instanceId, { x: Number(e.target.value) || 0, y: instance.transform.y })
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Y</span>
+            <input
+              type="number"
+              value={instance.transform.y}
+              onChange={(e) =>
+                setInstancePosition(instance.instanceId, { x: instance.transform.x, y: Number(e.target.value) || 0 })
+              }
+            />
+          </label>
+        </div>
+      </fieldset>
 
       <fieldset className="field roles-field">
         <legend>Roles</legend>
@@ -784,81 +855,146 @@ export function PropertiesPanel() {
             {role.role}
           </label>
         ))}
+        <p className="field-hint">
+          Exports as <code>{instance.tag}_&lt;role&gt;</code> for each enabled role. Click a
+          box/label on the canvas to select it individually (orange outline) — drag it, or nudge it
+          with arrow keys (Shift for bigger steps) for fine placement.
+        </p>
       </fieldset>
 
-      <p className="field-hint">
-        Exports as <code>{instance.tag}_&lt;role&gt;</code> for each enabled role. Click a box/label
-        on the canvas to select it individually (orange outline) — drag it, or nudge it with arrow
-        keys (Shift for bigger steps) for fine placement.
-      </p>
+      {instance.roles
+        .filter((role) => LABEL_ROLE_ORDER.includes(role.role) && role.enabled)
+        .map((role) => {
+          const worldPos = rotatePoint(role.offset, instance.transform.rotationDeg)
+          worldPos.x += instance.transform.x
+          worldPos.y += instance.transform.y
+          return (
+            <fieldset key={role.role} className="field roles-field">
+              <legend>Label: {role.role}</legend>
+              <div className="field-row">
+                <label className="field">
+                  <span>X</span>
+                  <input
+                    type="number"
+                    value={Math.round(worldPos.x * 100) / 100}
+                    onChange={(e) =>
+                      setRolePosition(instance.instanceId, role.role, {
+                        x: Number(e.target.value) || 0,
+                        y: worldPos.y,
+                      })
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Y</span>
+                  <input
+                    type="number"
+                    value={Math.round(worldPos.y * 100) / 100}
+                    onChange={(e) =>
+                      setRolePosition(instance.instanceId, role.role, {
+                        x: worldPos.x,
+                        y: Number(e.target.value) || 0,
+                      })
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Rot.</span>
+                  <input
+                    type="number"
+                    value={role.rotationDeg ?? 0}
+                    onChange={(e) => setRoleRotation(instance.instanceId, role.role, Number(e.target.value) || 0)}
+                  />
+                </label>
+              </div>
+              <ColorPickerRow
+                label="Fill"
+                value={role.fillColor}
+                defaultValue={BOX_ROLE_FILL[role.role] ?? '#ffffff'}
+                onChange={(v) => setRoleColor(instance.instanceId, role.role, 'fillColor', v)}
+              />
+              <ColorPickerRow
+                label="Border"
+                value={role.strokeColor}
+                defaultValue="#000000"
+                onChange={(v) => setRoleColor(instance.instanceId, role.role, 'strokeColor', v)}
+              />
+              <ColorPickerRow
+                label="Text"
+                value={role.textColor}
+                defaultValue="#000000"
+                onChange={(v) => setRoleColor(instance.instanceId, role.role, 'textColor', v)}
+              />
+            </fieldset>
+          )
+        })}
 
-      {getComponentType(instance.componentTypeId).instanceOptions?.map((opt) => {
-        const raw = instance.propertyValues[opt.key]
-        if (opt.kind === 'boolean') {
-          const checked = typeof raw === 'boolean' ? raw : (opt.default as boolean)
-          return (
-            <label key={opt.key} className="role-checkbox">
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.checked)}
-              />
-              {opt.label}
-            </label>
-          )
-        }
-        if (opt.kind === 'text') {
-          const text = typeof raw === 'string' ? raw : (opt.default as string)
-          return (
-            <label key={opt.key} className="field">
-              <span>{opt.label}</span>
-              <textarea
-                rows={3}
-                value={text}
-                onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
-              />
-            </label>
-          )
-        }
-        if (opt.kind === 'select') {
-          const value = typeof raw === 'string' ? raw : (opt.default as string)
-          return (
-            <label key={opt.key} className="field">
-              <span>{opt.label}</span>
-              <select
-                value={value}
-                onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
-              >
-                {opt.options?.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )
-        }
-        const color = typeof raw === 'string' && raw ? raw : (opt.default as string)
+      {(() => {
+        const options = getComponentType(instance.componentTypeId).instanceOptions
+        if (!options || options.length === 0) return null
         return (
-          <label key={opt.key} className="field">
-            <span>{opt.label}</span>
-            <div className="field-row">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
-                style={{ flex: '0 0 auto', width: '2.5rem', padding: 0 }}
-              />
-              <button
-                onClick={() => setInstancePropertyValue(instance.instanceId, opt.key, null)}
-                disabled={typeof raw !== 'string' || !raw}
-              >
-                Reset to default
-              </button>
-            </div>
-          </label>
+          <fieldset className="field roles-field">
+            <legend>Options</legend>
+            {options.map((opt) => {
+              const raw = instance.propertyValues[opt.key]
+              if (opt.kind === 'boolean') {
+                const checked = typeof raw === 'boolean' ? raw : (opt.default as boolean)
+                return (
+                  <label key={opt.key} className="role-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.checked)}
+                    />
+                    {opt.label}
+                  </label>
+                )
+              }
+              if (opt.kind === 'text') {
+                const text = typeof raw === 'string' ? raw : (opt.default as string)
+                return (
+                  <label key={opt.key} className="field">
+                    <span>{opt.label}</span>
+                    <textarea
+                      rows={3}
+                      value={text}
+                      onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
+                    />
+                  </label>
+                )
+              }
+              if (opt.kind === 'select') {
+                const value = typeof raw === 'string' ? raw : (opt.default as string)
+                return (
+                  <label key={opt.key} className="field">
+                    <span>{opt.label}</span>
+                    <select
+                      value={value}
+                      onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
+                    >
+                      {opt.options?.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )
+              }
+              const color = typeof raw === 'string' && raw ? raw : (opt.default as string)
+              return (
+                <ColorPickerRow
+                  key={opt.key}
+                  label={opt.label}
+                  value={typeof raw === 'string' && raw ? raw : null}
+                  defaultValue={color}
+                  onChange={(v) => setInstancePropertyValue(instance.instanceId, opt.key, v)}
+                />
+              )
+            })}
+          </fieldset>
         )
-      })}
+      })()}
 
       {(() => {
         const resizable = getComponentType(instance.componentTypeId).resizable

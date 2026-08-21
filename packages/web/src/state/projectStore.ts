@@ -341,6 +341,8 @@ interface ProjectState {
 
   addInstance: (componentTypeId: string, pos: Point, keepPlacing?: boolean) => void
   moveInstance: (instanceId: string, pos: Point) => void
+  /** One-shot X/Y edit (e.g. a typed properties-panel field) — unlike moveInstance, this pushes its own history entry since it isn't part of a checkpointed drag. */
+  setInstancePosition: (instanceId: string, pos: Point) => void
   /** Continuous drag from a canvas resize-instance handle — see moveInstance/resizeImageLayer for the analogous no-history-per-frame pattern. */
   resizeInstance: (instanceId: string, rect: { x: number; y: number; width: number; height: number }) => void
   deleteInstance: (instanceId: string) => void
@@ -352,6 +354,17 @@ interface ProjectState {
   setRoleEnabled: (instanceId: string, role: Suffix, enabled: boolean) => void
   /** worldRelativeOffset is relative to the instance origin, not yet compensated for rotation. */
   moveRole: (instanceId: string, role: Suffix, worldRelativeOffset: Point) => void
+  /** One-shot X/Y edit (typed field) — worldPos is an absolute canvas position, converted to the role's own local offset internally (same math moveRole/nudgeSelection use). Pushes its own history entry. */
+  setRolePosition: (instanceId: string, role: Suffix, worldPos: Point) => void
+  /** Independent spin of one label around its own anchor, on top of the parent instance's rotation. */
+  setRoleRotation: (instanceId: string, role: Suffix, rotationDeg: number) => void
+  /** null resets that color to the type default. */
+  setRoleColor: (
+    instanceId: string,
+    role: Suffix,
+    key: 'fillColor' | 'strokeColor' | 'textColor',
+    value: string | null,
+  ) => void
   centerRoles: (instanceId: string) => void
   /** pipePoints: free pipe knots caught in the same box-select as instanceIds ("mark knots like elements") — they translate by the same delta as the group for the duration of this drag. */
   beginGroupDrag: (
@@ -556,6 +569,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ),
     })),
 
+  setInstancePosition: (instanceId, pos) =>
+    set((state) => ({
+      ...pushHistory(state),
+      instances: state.instances.map((inst) =>
+        inst.instanceId === instanceId
+          ? { ...inst, transform: { ...inst.transform, x: pos.x, y: pos.y } }
+          : inst,
+      ),
+    })),
+
   resizeInstance: (instanceId, rect) =>
     set((state) => ({
       instances: state.instances.map((inst) => {
@@ -680,6 +703,40 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           roles: inst.roles.map((r) => (r.role === role ? { ...r, offset, manuallyPositioned: true } : r)),
         }
       }),
+    })),
+
+  setRolePosition: (instanceId, role, worldPos) =>
+    set((state) => ({
+      ...pushHistory(state),
+      instances: state.instances.map((inst) => {
+        if (inst.instanceId !== instanceId) return inst
+        const worldRelativeOffset = { x: worldPos.x - inst.transform.x, y: worldPos.y - inst.transform.y }
+        const offset = rotatePoint(worldRelativeOffset, -inst.transform.rotationDeg)
+        return {
+          ...inst,
+          roles: inst.roles.map((r) => (r.role === role ? { ...r, offset, manuallyPositioned: true } : r)),
+        }
+      }),
+    })),
+
+  setRoleRotation: (instanceId, role, rotationDeg) =>
+    set((state) => ({
+      ...pushHistory(state),
+      instances: state.instances.map((inst) =>
+        inst.instanceId === instanceId
+          ? { ...inst, roles: inst.roles.map((r) => (r.role === role ? { ...r, rotationDeg } : r)) }
+          : inst,
+      ),
+    })),
+
+  setRoleColor: (instanceId, role, key, value) =>
+    set((state) => ({
+      ...pushHistory(state),
+      instances: state.instances.map((inst) =>
+        inst.instanceId === instanceId
+          ? { ...inst, roles: inst.roles.map((r) => (r.role === role ? { ...r, [key]: value } : r)) }
+          : inst,
+      ),
     })),
 
   centerRoles: (instanceId) =>
