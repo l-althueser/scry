@@ -19,6 +19,8 @@ const HOP_RADIUS = 6
 
 export const PIPE_DEFAULT_COLOR = '#000000'
 export const PIPE_NON_CLICKABLE_COLOR = '#b3b3b3'
+/** Default size (tip-to-base length, world units) for a newly toggled-on PipeArrow. */
+export const DEFAULT_ARROW_SIZE = 12
 
 /**
  * Resolves the line color a pipe should render/export with. An explicit
@@ -244,6 +246,52 @@ export function shiftPipePointRefsForDelete(
     const toPort = adjustEnd(p.toPort)
     return fromPort === p.fromPort && toPort === p.toPort ? p : { ...p, fromPort, toPort }
   })
+}
+
+export interface ResolvedPipeArrow {
+  pos: Point
+  rotationDeg: number
+  size: number
+}
+
+/**
+ * Resolves each of a pipe's PipeArrow entries against its current RAW point
+ * list (getPipePoints's [fromPos, ...waypoints, toPos] — the same list
+ * pointIndex is defined against, NOT getDisplayPoints's reshaped orthogonal
+ * copy, whose indices don't correspond 1:1 to the raw list — see
+ * getDisplayPoints's own doc comment on why the two must stay separate). An
+ * out-of-range pointIndex (shouldn't normally happen — see
+ * insertPipeWaypoint/deletePipeWaypoint's renumbering) is simply skipped
+ * rather than thrown. `pipe.arrows` is defensively defaulted to `[]` —
+ * a project saved before this field existed has pipes with no `arrows` at
+ * all (no schema migration in this codebase; optional new fields are
+ * handled with a fallback at each read site instead, same as elsewhere).
+ */
+export function resolvePipeArrows(pipe: Pick<PipeInstance, 'arrows'>, points: Point[]): ResolvedPipeArrow[] {
+  return (pipe.arrows ?? [])
+    .filter((a) => a.pointIndex >= 0 && a.pointIndex < points.length)
+    .map((a) => ({ pos: points[a.pointIndex], rotationDeg: a.rotationDeg, size: a.size }))
+}
+
+/**
+ * A sensible default rotation for a newly-toggled-on arrow at `pointIndex`
+ * — the direction of the pipe's local tangent there (average of the
+ * incoming/outgoing segment directions at an interior point; whichever
+ * single segment exists at an end). Purely a starting point — the arrow's
+ * rotationDeg is freely editable afterward, this just avoids a bare 0°
+ * arrow pointing right regardless of the pipe's actual orientation.
+ */
+export function computeDefaultArrowRotation(points: Point[], pointIndex: number): number {
+  if (points.length < 2) return 0
+  const prev = points[pointIndex - 1]
+  const cur = points[pointIndex]
+  const next = points[pointIndex + 1]
+  const dirs: Point[] = []
+  if (prev) dirs.push({ x: cur.x - prev.x, y: cur.y - prev.y })
+  if (next) dirs.push({ x: next.x - cur.x, y: next.y - cur.y })
+  const sum = dirs.reduce((acc, d) => ({ x: acc.x + d.x, y: acc.y + d.y }), { x: 0, y: 0 })
+  if (sum.x === 0 && sum.y === 0) return 0
+  return (Math.atan2(sum.y, sum.x) * 180) / Math.PI
 }
 
 export function midpoint(points: Point[]): Point {

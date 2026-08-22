@@ -228,6 +228,12 @@ function tryMergeOneFreeEndChain(
         indicatorEnabled: anchor.indicatorEnabled || continuing.indicatorEnabled,
         nameEnabled: anchor.nameEnabled || continuing.nameEnabled,
         strokeColor: anchor.strokeColor ?? continuing.strokeColor ?? null,
+        // Concatenating (and possibly reversing) two point lists into one
+        // would require remapping both sides' arrow pointIndex values
+        // through that reshuffle — a rare edge case (both segments already
+        // having arrows right as they're auto-merged mid-draw) not worth
+        // the complexity; simplest correct behavior is to drop them.
+        arrows: [],
       }
       const nextPipes = pipes
         .filter((p) => p.instanceId !== anchor.instanceId && p.instanceId !== continuing.instanceId)
@@ -671,6 +677,8 @@ interface ProjectState {
   pipes: PipeInstance[]
   selectedPipeIds: string[]
   selectedWaypoint: { pipeId: string; index: number } | null
+  /** Which pipe endpoint ('from'/'to') is selected — the endpoint counterpart to selectedWaypoint, needed so the properties panel can show per-point arrow controls (see PipeArrow) for an end, not just an interior waypoint. */
+  selectedEndpoint: { pipeId: string; side: 'from' | 'to' } | null
   freeShapes: FreeShape[]
   selectedShapeIds: string[]
   leaderLines: LeaderLine[]
@@ -814,6 +822,9 @@ interface ProjectState {
   autoRoutePipe: (pipeId: string) => void
   selectPipes: (pipeIds: string[]) => void
   selectWaypoint: (selection: { pipeId: string; index: number } | null) => void
+  selectEndpoint: (selection: { pipeId: string; side: 'from' | 'to' } | null) => void
+  /** Adds, updates, or (when arrow is null) removes the arrow marker at a specific point along a pipe (see PipeArrow) — one undo step. */
+  setPipeArrow: (pipeId: string, pointIndex: number, arrow: { size: number; rotationDeg: number } | null) => void
 
   /** keepDrawing is true when Shift was held, so the tool stays active for drawing several shapes in a row. */
   addFreeShape: (
@@ -942,6 +953,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   pipes: [],
   selectedPipeIds: [],
   selectedWaypoint: null,
+  selectedEndpoint: null,
   freeShapes: [],
   selectedShapeIds: [],
   leaderLines: [],
@@ -1364,6 +1376,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedRole: null,
       selectedPipeIds: instanceIds.length > 0 ? [] : get().selectedPipeIds,
       selectedWaypoint: null,
+      selectedEndpoint: null,
       selectedShapeIds: instanceIds.length > 0 ? [] : get().selectedShapeIds,
       selectedLayerId: instanceIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLineIds: instanceIds.length > 0 ? [] : get().selectedLeaderLineIds,
@@ -1378,6 +1391,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedRole: null,
       selectedPipeIds: state.pipes.map((p) => p.instanceId),
       selectedWaypoint: null,
+      selectedEndpoint: null,
       selectedShapeIds: state.freeShapes.map((s) => s.instanceId),
       selectedLayerId: null,
       selectedLeaderLineIds: state.leaderLines.map((l) => l.instanceId),
@@ -1541,6 +1555,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         strokeColor: null,
         volumeTag: null,
         hopOverrides: {},
+        arrows: [],
       }
       const { pipes: mergedPipes, resolveId } = mergeFreeEndChains([...state.pipes, pipe])
       return {
@@ -1695,6 +1710,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
                 { x: pt.x, y: pt.y, kind: 'corner' as const },
                 ...p.waypoints.slice(index),
               ],
+              // Same renumbering as shiftPipePointRefsForInsert, just applied
+              // to this pipe's own arrow markers instead of scanning other
+              // pipes' PortRefs.
+              arrows: (p.arrows ?? []).map((a) =>
+                a.pointIndex >= insertedPointIndex ? { ...a, pointIndex: a.pointIndex + 1 } : a,
+              ),
             }
           : p,
       )
@@ -1714,6 +1735,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedShapeIds: [],
         selectedLayerId: null,
         selectedWaypoint: { pipeId, index },
+        selectedEndpoint: null,
         tagRenameError: null,
         routeError: null,
       }
@@ -1726,7 +1748,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const removedPointIndex = index + 1
       const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers)
       const pipes = shiftPipePointRefsForDelete(state.pipes, state.instances, state.layers, pipeId, removedPointIndex).map(
-        (p) => (p.instanceId === pipeId ? { ...p, waypoints: p.waypoints.filter((_, i) => i !== index) } : p),
+        (p) =>
+          p.instanceId === pipeId
+            ? {
+                ...p,
+                waypoints: p.waypoints.filter((_, i) => i !== index),
+                // Same reasoning as insertPipeWaypoint above: an arrow
+                // exactly on the removed point is dropped, later ones
+                // shift down to keep naming the same physical point.
+                arrows: (p.arrows ?? [])
+                  .filter((a) => a.pointIndex !== removedPointIndex)
+                  .map((a) => (a.pointIndex > removedPointIndex ? { ...a, pointIndex: a.pointIndex - 1 } : a)),
+              }
+            : p,
       )
       const newPipe = pipes.find((p) => p.instanceId === pipeId)!
       const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers)
@@ -1739,6 +1773,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         pipes,
         leaderLines,
         selectedWaypoint: null,
+        selectedEndpoint: null,
       }
     }),
 
@@ -1803,6 +1838,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedInstanceIds: pipeIds.length > 0 ? [] : get().selectedInstanceIds,
       selectedRole: null,
       selectedWaypoint: null,
+      selectedEndpoint: null,
       selectedShapeIds: pipeIds.length > 0 ? [] : get().selectedShapeIds,
       selectedLayerId: pipeIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLineIds: pipeIds.length > 0 ? [] : get().selectedLeaderLineIds,
@@ -1813,6 +1849,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
 
   selectWaypoint: (selection) => set({ selectedWaypoint: selection }),
+
+  selectEndpoint: (selection) => set({ selectedEndpoint: selection }),
+
+  setPipeArrow: (pipeId, pointIndex, arrow) =>
+    set((state) => ({
+      ...pushHistory(state),
+      pipes: state.pipes.map((p) => {
+        if (p.instanceId !== pipeId) return p
+        const arrows = (p.arrows ?? []).filter((a) => a.pointIndex !== pointIndex)
+        if (arrow) arrows.push({ pointIndex, size: arrow.size, rotationDeg: arrow.rotationDeg })
+        return { ...p, arrows }
+      }),
+    })),
 
   addFreeShape: (kind, points, keepDrawing = false) =>
     set((state) => {
@@ -1893,6 +1942,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedPipeIds: shapeIds.length > 0 ? [] : get().selectedPipeIds,
       selectedRole: null,
       selectedWaypoint: null,
+      selectedEndpoint: null,
       selectedLayerId: shapeIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLineIds: shapeIds.length > 0 ? [] : get().selectedLeaderLineIds,
       selectedGroupId: null,
@@ -1966,6 +2016,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedShapeIds: leaderLineIds.length > 0 ? [] : get().selectedShapeIds,
       selectedRole: null,
       selectedWaypoint: null,
+      selectedEndpoint: null,
       selectedLayerId: leaderLineIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLinePoint: null,
       selectedGroupId: null,
@@ -1982,6 +2033,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedLeaderLineIds: selection.leaderLineIds,
       selectedRole: null,
       selectedWaypoint: null,
+      selectedEndpoint: null,
       selectedLeaderLinePoint: null,
       selectedLayerId: null,
       selectedGroupId: null,

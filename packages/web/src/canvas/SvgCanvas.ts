@@ -24,6 +24,7 @@ import {
 } from '../leaderLines/leaderLineGeometry'
 import {
   configurePlaceholderRoles,
+  fmt,
   getComponentType,
   getComponentTypeVersion,
   resolveLocalBodyCorners,
@@ -45,6 +46,7 @@ import {
   midpoint,
   pipePointPortId,
   resolveIndicatorTag,
+  resolvePipeArrows,
   resolvePipeColor,
   straightPathD,
   straightPathDWithHops,
@@ -140,6 +142,8 @@ export interface SvgCanvasCallbacks {
   onPipeSelectionChanged: (pipeIds: string[]) => void
   onWaypointMoved: (pipeId: string, index: number, worldPoint: Point) => void
   onWaypointSelected: (selection: WaypointSelection | null) => void
+  /** Endpoint counterpart to onWaypointSelected — lets the properties panel show per-point arrow controls for a selected 'from'/'to' end, not just an interior waypoint (see PipeArrow). */
+  onEndpointSelected: (selection: { pipeId: string; side: PipeEndpointSide } | null) => void
   /** Double-clicking a pipe's line (not an existing waypoint handle) inserts a new waypoint at `index` (splice position into that pipe's waypoints array). */
   onWaypointAdded: (pipeId: string, index: number, worldPoint: Point) => void
   /**
@@ -1477,7 +1481,7 @@ export class SvgCanvas {
 
       this.setPipeSelectionFromUser([pipeId])
       this.setWaypointSelectionFromUser(null)
-      this.selectedEndpoint = { pipeId, side }
+      this.setEndpointSelectionFromUser({ pipeId, side })
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-pipe-endpoint'
       this.dragPipeId = pipeId
@@ -1502,7 +1506,7 @@ export class SvgCanvas {
 
       this.setPipeSelectionFromUser([pipeId])
       this.setWaypointSelectionFromUser({ pipeId, index })
-      this.selectedEndpoint = null
+      this.setEndpointSelectionFromUser(null)
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-waypoint'
       this.dragPipeId = pipeId
@@ -2684,6 +2688,16 @@ export class SvgCanvas {
     this.refreshWaypointHandles()
   }
 
+  private setEndpointSelectionFromUser(selection: { pipeId: string; side: PipeEndpointSide } | null) {
+    this.selectedEndpoint = selection
+    this.callbacks.onEndpointSelected(selection)
+  }
+
+  /** External sync: internal state only, no callback. */
+  setEndpointSelection(selection: { pipeId: string; side: PipeEndpointSide } | null) {
+    this.selectedEndpoint = selection
+  }
+
   private refreshWaypointHandles() {
     while (this.waypointHandlesGroup.firstChild) {
       this.waypointHandlesGroup.removeChild(this.waypointHandlesGroup.firstChild)
@@ -2993,6 +3007,13 @@ export class SvgCanvas {
         nameText.setAttribute('font-size', '10')
         nameText.style.pointerEvents = 'none'
         group.appendChild(nameText)
+
+        // Per-point arrow markers (see PipeArrow) — rebuilt wholesale below
+        // each sync, same as refreshWaypointHandles, since the count varies.
+        const arrowsGroup = document.createElementNS(SVG_NS, 'g')
+        arrowsGroup.setAttribute('class', 'gv-pipe-arrows')
+        arrowsGroup.style.pointerEvents = 'none'
+        group.appendChild(arrowsGroup)
       }
 
       const points = pointsByPipe.get(pipe.instanceId)
@@ -3007,6 +3028,7 @@ export class SvgCanvas {
       const hitPath = group.querySelector<SVGPathElement>('.gv-pipe-hit')!
       const indicatorCircle = group.querySelector<SVGCircleElement>('.gv-pipe-indicator')!
       const nameText = group.querySelector<SVGTextElement>('.gv-pipe-name')!
+      const arrowsGroup = group.querySelector<SVGGElement>('.gv-pipe-arrows')!
 
       const d =
         pipe.routingMode === 'curved'
@@ -3035,6 +3057,27 @@ export class SvgCanvas {
       nameText.textContent = resolveIndicatorTag(pipe)
       nameText.setAttribute('x', String(mid.x))
       nameText.setAttribute('y', String(mid.y - 10))
+
+      // Arrow markers resolve against the RAW point list (points), not
+      // displayPoints — pointIndex is defined the same way pipePointPortId
+      // is (see resolvePipeArrows's own doc comment), and displayPoints can
+      // insert extra orthogonal-mode corners that would shift indices.
+      while (arrowsGroup.firstChild) arrowsGroup.removeChild(arrowsGroup.firstChild)
+      const color = resolvePipeColor(pipe)
+      for (const arrow of resolvePipeArrows(pipe, points)) {
+        // An open chevron (two strokes meeting at the tip), not a filled
+        // triangle — tip at local (size,0), pointing along +X before rotation.
+        const half = arrow.size * 0.5
+        const path = document.createElementNS(SVG_NS, 'path')
+        path.setAttribute('d', `M0,${fmt(-half)} L${fmt(arrow.size)},0 L0,${fmt(half)}`)
+        path.setAttribute('fill', 'none')
+        path.setAttribute('stroke', color)
+        path.setAttribute('stroke-width', '2')
+        path.setAttribute('stroke-linecap', 'round')
+        path.setAttribute('stroke-linejoin', 'round')
+        path.setAttribute('transform', `translate(${fmt(arrow.pos.x)},${fmt(arrow.pos.y)}) rotate(${fmt(arrow.rotationDeg)})`)
+        arrowsGroup.appendChild(path)
+      }
     }
 
     for (const [pipeId, el] of this.pipeEls) {

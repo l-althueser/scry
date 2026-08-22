@@ -132,6 +132,29 @@ export interface PipeInstance {
   volumeTag?: string | null
   /** crossingId -> which of the two pipes renders the hop arc at that crossing. */
   hopOverrides: Record<string, 'self' | 'other'>
+  /** Arrow markers toggled on individually at specific points along this pipe — see PipeArrow. */
+  arrows: PipeArrow[]
+}
+
+/**
+ * One arrow marker sitting at a specific point along a pipe's own point
+ * list — `pointIndex` uses the same full-point-list convention
+ * pipePointPortId already does elsewhere (0 = fromPort, the last index =
+ * toPort, anything in between an interior waypoint), so an arrow always
+ * names a physical point on the pipe rather than a raw coordinate: dragging
+ * that point moves its arrow along with it, and inserting/deleting a
+ * waypoint elsewhere on the pipe renumbers pointIndex the same way
+ * PortRef/LeaderLineBorderRef references into this pipe already do (see
+ * insertPipeWaypoint/deletePipeWaypoint in projectStore.ts). Purely
+ * decorative, like the indicator dot — no id, never read by Node-RED.
+ * rotationDeg is fully free (not tied to the pipe's own flow direction) —
+ * only given a sensible default (pointing along the pipe's local tangent
+ * there) at the moment it's first toggled on.
+ */
+export interface PipeArrow {
+  pointIndex: number
+  size: number
+  rotationDeg: number
 }
 
 export interface LeaderLineEndpointRef {

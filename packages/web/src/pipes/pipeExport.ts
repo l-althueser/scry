@@ -5,6 +5,7 @@ import {
   curvedPathD,
   midpoint,
   resolveIndicatorTag,
+  resolvePipeArrows,
   resolvePipeColor,
   straightPathDWithHops,
   type Point,
@@ -66,6 +67,16 @@ export function exportPipeInstance(
       `    <g id="${nameTag}_name">`,
       `      <text x="${fmt(mid.x)}" y="${fmt(mid.y - 10)}" text-anchor="middle" dominant-baseline="central" font-family="Arial" font-size="10">${nameTag}</text>`,
       `    </g>`,
+    )
+  }
+
+  // Resolved against the RAW point list (points), not displayPoints — same
+  // reasoning as the live canvas renderer (see SvgCanvas.ts's syncPipes).
+  // An open chevron (two strokes meeting at the tip), not a filled triangle.
+  for (const arrow of resolvePipeArrows(pipe, points)) {
+    const half = arrow.size * 0.5
+    lines.push(
+      `    <path d="M0,${fmt(-half)} L${fmt(arrow.size)},0 L0,${fmt(half)}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(${fmt(arrow.pos.x)},${fmt(arrow.pos.y)}) rotate(${fmt(arrow.rotationDeg)})" />`,
     )
   }
 

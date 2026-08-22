@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '../state/projectStore'
 import {
   computeCrossingsForPipe,
+  computeDefaultArrowRotation,
+  DEFAULT_ARROW_SIZE,
   getDisplayPoints,
   getPipePoints,
   PIPE_DEFAULT_COLOR,
@@ -166,6 +168,9 @@ export function PropertiesPanel() {
   const renameVolumeTag = useProjectStore((s) => s.renameVolumeTag)
   const setPipeIndicatorEnabled = useProjectStore((s) => s.setPipeIndicatorEnabled)
   const setPipeNameEnabled = useProjectStore((s) => s.setPipeNameEnabled)
+  const selectedWaypoint = useProjectStore((s) => s.selectedWaypoint)
+  const selectedEndpoint = useProjectStore((s) => s.selectedEndpoint)
+  const setPipeArrow = useProjectStore((s) => s.setPipeArrow)
   const setPipeColor = useProjectStore((s) => s.setPipeColor)
   const setPipeRoutingMode = useProjectStore((s) => s.setPipeRoutingMode)
   const setHopOverride = useProjectStore((s) => s.setHopOverride)
@@ -439,6 +444,78 @@ export function PropertiesPanel() {
               : " Shown at this pipe's midpoint."}
           </p>
         </fieldset>
+
+        {(() => {
+          // The point currently focused for THIS pipe, if any — either an
+          // interior waypoint or an end — expressed as a full-point-list
+          // index (see PipeArrow's own doc comment for why: 0 = fromPort,
+          // the last index = toPort, else waypointIndex + 1).
+          let pointIndex: number | null = null
+          if (selectedWaypoint && selectedWaypoint.pipeId === pipe.instanceId) {
+            pointIndex = selectedWaypoint.index + 1
+          } else if (selectedEndpoint && selectedEndpoint.pipeId === pipe.instanceId) {
+            const rawPoints = getPipePoints(pipe, instances, pipes, layers)
+            pointIndex = selectedEndpoint.side === 'from' ? 0 : rawPoints ? rawPoints.length - 1 : null
+          }
+          if (pointIndex === null) return null
+
+          const arrow = (pipe.arrows ?? []).find((a) => a.pointIndex === pointIndex)
+          const idx = pointIndex
+          return (
+            <fieldset className="field roles-field">
+              <legend>Arrow at this point</legend>
+              <label className="role-checkbox">
+                <input
+                  type="checkbox"
+                  checked={!!arrow}
+                  onChange={(e) => {
+                    if (!e.target.checked) {
+                      setPipeArrow(pipe.instanceId, idx, null)
+                      return
+                    }
+                    const rawPoints = getPipePoints(pipe, instances, pipes, layers)
+                    const rotationDeg = rawPoints ? computeDefaultArrowRotation(rawPoints, idx) : 0
+                    setPipeArrow(pipe.instanceId, idx, { size: DEFAULT_ARROW_SIZE, rotationDeg })
+                  }}
+                />
+                show arrow
+              </label>
+              {arrow && (
+                <div className="field-row">
+                  <label className="field">
+                    <span>Size</span>
+                    <input
+                      type="number"
+                      min={2}
+                      max={100}
+                      value={arrow.size}
+                      onChange={(e) =>
+                        setPipeArrow(pipe.instanceId, idx, {
+                          size: Number(e.target.value) || DEFAULT_ARROW_SIZE,
+                          rotationDeg: arrow.rotationDeg,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Rotation (&deg;)</span>
+                    <input
+                      type="number"
+                      value={Math.round(arrow.rotationDeg)}
+                      onChange={(e) =>
+                        setPipeArrow(pipe.instanceId, idx, {
+                          size: arrow.size,
+                          rotationDeg: Number(e.target.value) || 0,
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              )}
+              <p className="field-hint">Purely decorative — never read by Node-RED, just a visual direction cue.</p>
+            </fieldset>
+          )
+        })()}
 
         <fieldset className="field roles-field">
           <legend>Routing</legend>

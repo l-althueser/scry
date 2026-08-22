@@ -30,6 +30,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const selectedRole = useProjectStore((s) => s.selectedRole)
   const selectedPipeIds = useProjectStore((s) => s.selectedPipeIds)
   const selectedWaypoint = useProjectStore((s) => s.selectedWaypoint)
+  const selectedEndpoint = useProjectStore((s) => s.selectedEndpoint)
   const selectedShapeIds = useProjectStore((s) => s.selectedShapeIds)
   const selectedLeaderLineIds = useProjectStore((s) => s.selectedLeaderLineIds)
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
@@ -50,6 +51,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const movePipeEndpoint = useProjectStore((s) => s.movePipeEndpoint)
   const finalizePipeEndpointDrag = useProjectStore((s) => s.finalizePipeEndpointDrag)
   const selectWaypoint = useProjectStore((s) => s.selectWaypoint)
+  const selectEndpoint = useProjectStore((s) => s.selectEndpoint)
   const checkpointHistory = useProjectStore((s) => s.checkpointHistory)
   const addFreeShape = useProjectStore((s) => s.addFreeShape)
   const moveShape = useProjectStore((s) => s.moveShape)
@@ -87,6 +89,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
       onWaypointMoved: (pipeId, index, pt) => movePipeWaypoint(pipeId, index, pt),
       onWaypointAdded: (pipeId, index, pt) => insertPipeWaypoint(pipeId, index, pt),
       onWaypointSelected: (selection) => selectWaypoint(selection),
+      onEndpointSelected: (selection) => selectEndpoint(selection),
       onPipeEndpointMoved: (pipeId, side, ref) => movePipeEndpoint(pipeId, side, ref),
       onPipeEndpointDragEnd: (pipeId) => finalizePipeEndpointDrag(pipeId),
       onShapeAdded: (kind, points, keepDrawing) => addFreeShape(kind, points, keepDrawing),
@@ -151,6 +154,10 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   useEffect(() => {
     canvasRef.current?.setWaypointSelection(selectedWaypoint)
   }, [selectedWaypoint])
+
+  useEffect(() => {
+    canvasRef.current?.setEndpointSelection(selectedEndpoint)
+  }, [selectedEndpoint])
 
   useEffect(() => {
     canvasRef.current?.setShapeSelection(selectedShapeIds)

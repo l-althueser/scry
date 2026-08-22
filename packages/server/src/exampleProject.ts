@@ -103,6 +103,7 @@ function pipe(
     indicatorEnabled,
     nameEnabled: false,
     hopOverrides: {},
+    arrows: [],
   }
 }
 
