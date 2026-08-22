@@ -35,6 +35,7 @@ import { downloadTextFile } from '../export/downloadFile'
 import { computePipeVolumeGroups, expandToVolumeSiblings } from '../pipes/pipeVolumes'
 import {
   detachPipesFromInstances,
+  detachPipesFromPipes,
   getPipePoints,
   IMAGE_POINT_PREFIX,
   PIPE_POINT_PREFIX,
@@ -587,9 +588,12 @@ function computeMixedDeletion(
   return {
     instances: state.instances.filter((inst) => !ids.instanceIds.has(inst.instanceId)),
     pipes: recomputeVolumeTags(
-      detachPipesFromInstances(state.pipes, state.instances, ids.instanceIds).filter(
-        (p) => !ids.pipeIds.has(p.instanceId),
-      ),
+      detachPipesFromPipes(
+        detachPipesFromInstances(state.pipes, state.instances, ids.instanceIds),
+        state.instances,
+        state.layers,
+        ids.pipeIds,
+      ).filter((p) => !ids.pipeIds.has(p.instanceId)),
     ),
     leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
       instanceIds: ids.instanceIds,
@@ -1577,7 +1581,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const groups = stripDeletedGroupMembers(state.groups, { pipe: removed })
       return {
         ...pushHistory(state),
-        pipes: recomputeVolumeTags(state.pipes.filter((p) => !pipeIds.includes(p.instanceId))),
+        // A surviving pipe branched onto one of these via a "pt:{index}"
+        // PortRef would otherwise silently stop resolving (getPipePoints
+        // returns null the moment its target pipe is gone) — freeze it at
+        // its last position first, same "leave a knot" contract as deleting
+        // a component a pipe was attached to.
+        pipes: recomputeVolumeTags(
+          detachPipesFromPipes(state.pipes, state.instances, state.layers, removed).filter(
+            (p) => !pipeIds.includes(p.instanceId),
+          ),
+        ),
         // A leader line anchored to one of these pipes' borders (see
         // LeaderLineBorderRef) would otherwise silently stop resolving —
         // freeze it at its last position instead, same "leave a knot"

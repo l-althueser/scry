@@ -100,6 +100,38 @@ export function detachPipesFromInstances(
   })
 }
 
+/**
+ * Detaches any pipe endpoint branched onto one of the given (about-to-be-
+ * removed) *other pipes* — a "pt:{index}" PortRef whose target pipe is
+ * being deleted — replacing it with a FreePoint fixed at its last known
+ * world position, same "leave a knot instead of dangling" contract as
+ * detachPipesFromInstances (that one only ever checked component instances,
+ * never another pipe being the thing that disappeared, so deleting a pipe a
+ * branch was attached to silently made that branch unresolvable —
+ * getPipePoints returns null the moment the referenced pipe is gone —
+ * which reads as "the branch got deleted too" even though its PipeInstance
+ * technically still exists). `pipes`/`instances`/`layers` must be the
+ * arrays as they stood *before* removal, since positions are resolved
+ * against them — call this before actually filtering the deleted pipes out.
+ */
+export function detachPipesFromPipes(
+  pipes: PipeInstance[],
+  instances: ComponentInstance[],
+  layers: Layer[],
+  removedPipeIds: ReadonlySet<string>,
+): PipeInstance[] {
+  const detach = (ref: PortRef | FreePoint): PortRef | FreePoint => {
+    if (!isPortRef(ref) || !ref.portId.startsWith(PIPE_POINT_PREFIX) || !removedPipeIds.has(ref.instanceId)) return ref
+    return resolvePortRefWorldPosition(ref, instances, pipes, layers) ?? ref
+  }
+  return pipes.map((pipe) => {
+    if (removedPipeIds.has(pipe.instanceId)) return pipe
+    const fromPort = detach(pipe.fromPort)
+    const toPort = detach(pipe.toPort)
+    return fromPort === pipe.fromPort && toPort === pipe.toPort ? pipe : { ...pipe, fromPort, toPort }
+  })
+}
+
 /** portId convention for a PortRef that points at another pipe's point (endpoint or waypoint) instead of a component port. */
 export const PIPE_POINT_PREFIX = 'pt:'
 
