@@ -120,6 +120,8 @@ export function PropertiesPanel() {
   const createGroup = useProjectStore((s) => s.createGroup)
   const ungroup = useProjectStore((s) => s.ungroup)
   const deleteGroup = useProjectStore((s) => s.deleteGroup)
+  const duplicateSelection = useProjectStore((s) => s.duplicateSelection)
+  const copySelectionToClipboard = useProjectStore((s) => s.copySelectionToClipboard)
   const setGroupStyle = useProjectStore((s) => s.setGroupStyle)
   const setSelectionStyle = useProjectStore((s) => s.setSelectionStyle)
   const deleteSelection = useProjectStore((s) => s.deleteSelection)
@@ -269,10 +271,12 @@ export function PropertiesPanel() {
         counts={counts}
         onStyleChange={(field, value) => setGroupStyle(selectedGroupId, field, value)}
         actions={[
+          { label: 'Duplicate', onClick: () => duplicateSelection() },
+          { label: 'Copy', onClick: () => copySelectionToClipboard() },
           { label: 'Ungroup', onClick: () => ungroup(selectedGroupId) },
           { label: 'Delete group', onClick: () => deleteGroup(selectedGroupId), danger: true },
         ]}
-        footerHint="Double-click a member to edit it individually. Ctrl/Cmd+Shift+G to ungroup, Escape to deselect."
+        footerHint="Double-click a member to edit it individually. Ctrl/Cmd+D to duplicate, Ctrl/Cmd+C to copy, Ctrl/Cmd+Shift+G to ungroup, Escape to deselect."
       />
     )
   }
@@ -296,10 +300,12 @@ export function PropertiesPanel() {
         }}
         onStyleChange={(field, value) => setSelectionStyle(field, value)}
         actions={[
+          { label: 'Duplicate', onClick: () => duplicateSelection() },
+          { label: 'Copy', onClick: () => copySelectionToClipboard() },
           { label: 'Group', onClick: () => createGroup() },
           { label: 'Delete all', onClick: () => deleteSelection(), danger: true },
         ]}
-        footerHint="Ctrl/Cmd+G to group, Delete/Backspace to remove all, Escape to deselect."
+        footerHint="Ctrl/Cmd+D to duplicate, Ctrl/Cmd+C to copy, Ctrl/Cmd+G to group, Delete/Backspace to remove all, Escape to deselect."
       />
     )
   }

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   isPortRef,
+  isScryClipboardEnvelope,
   type ComponentInstance,
   type FreePoint,
   type FreeShape,
@@ -13,11 +14,14 @@ import {
   type Layer,
   type LeaderLine,
   type LeaderLineEndpoint,
+  type LeaderLineEndpointRef,
   type PipeInstance,
   type PortRef,
   type Project,
   type ProjectMeta,
   type RoutingMode,
+  type ScryClipboardEnvelope,
+  type ScryClipboardPayload,
   type Suffix,
   type TextAlign,
   type Waypoint,
@@ -28,8 +32,15 @@ import * as api from '../api/client'
 import { exportProjectToSvg } from '../export/svgExport'
 import { downloadTextFile } from '../export/downloadFile'
 import { computePipeVolumeGroups } from '../pipes/pipeVolumes'
-import { detachPipesFromInstances, getPipePoints, PIPE_POINT_PREFIX, pipePointPortId } from '../pipes/pipeGeometry'
-import { detachLeaderLinesFromInstances } from '../leaderLines/leaderLineGeometry'
+import {
+  detachPipesFromInstances,
+  getPipePoints,
+  IMAGE_POINT_PREFIX,
+  PIPE_POINT_PREFIX,
+  pipePointPortId,
+  resolvePortRefWorldPosition,
+} from '../pipes/pipeGeometry'
+import { detachLeaderLinesFromInstances, resolveLeaderLineFromPosition } from '../leaderLines/leaderLineGeometry'
 import { computeAutoRoute } from '../routing/autoRoute'
 import { DEFAULT_FONT_SIZE, DEFAULT_SHAPE_STYLE } from '../shapes/freeShapeGeometry'
 
@@ -251,6 +262,191 @@ function clearSelectedGroupIfGone(groups: Group[], selectedGroupId: string | nul
   return groups.some((g) => g.groupId === selectedGroupId) ? selectedGroupId : null
 }
 
+function isLeaderLineEndpointRef(ref: LeaderLineEndpoint): ref is LeaderLineEndpointRef {
+  return 'instanceId' in ref
+}
+
+/**
+ * Mirrors createGroup's existing selection-reading pattern: filters the
+ * project's four entity arrays down to the four selected-id arrays, plus
+ * `groups` filtered to `selectedGroupId` (0 or 1 entries). This is the
+ * single place "what counts as the current selection" is defined — reused
+ * by duplicate, copy, and (implicitly, via the same ScryClipboardPayload
+ * shape) paste.
+ *
+ * Any pipe port or leader-line anchor that references a component instance
+ * or another pipe NOT included in this gathered set is frozen into an open
+ * (FreePoint) end at its current world position — a clone/paste must never
+ * keep pointing at something the user didn't actually select, mirroring how
+ * detachPipesFromInstances/detachLeaderLinesFromInstances already freeze an
+ * end at its last known position when the instance it pointed at is
+ * deleted. A reference to an image layer's connection point is left alone:
+ * layers aren't duplicated by this feature, so the same shared background
+ * image is still there in the clone/paste target either way. Doing this
+ * here (not later in cloneEntitySet) is what makes it work for copy/paste
+ * too, not just duplicate — cloneEntitySet only ever sees the entities it's
+ * asked to clone, with no way to resolve a position for something outside
+ * that set, whereas gather time still has the full live project to resolve
+ * against.
+ */
+function gatherSelectionAsEntitySet(
+  state: Pick<
+    ProjectState,
+    | 'instances'
+    | 'pipes'
+    | 'freeShapes'
+    | 'leaderLines'
+    | 'layers'
+    | 'groups'
+    | 'selectedInstanceIds'
+    | 'selectedPipeIds'
+    | 'selectedShapeIds'
+    | 'selectedLeaderLineIds'
+    | 'selectedGroupId'
+  >,
+): ScryClipboardPayload {
+  const instanceIds = new Set(state.selectedInstanceIds)
+  const pipeIds = new Set(state.selectedPipeIds)
+  const shapeIds = new Set(state.selectedShapeIds)
+  const leaderLineIds = new Set(state.selectedLeaderLineIds)
+
+  const openEndIfExternal = (ref: PortRef | FreePoint): PortRef | FreePoint => {
+    if (!isPortRef(ref)) return ref
+    const referencesUngatheredPipe = ref.portId.startsWith(PIPE_POINT_PREFIX) && !pipeIds.has(ref.instanceId)
+    const referencesUngatheredInstance =
+      !ref.portId.startsWith(PIPE_POINT_PREFIX) &&
+      !ref.portId.startsWith(IMAGE_POINT_PREFIX) &&
+      !instanceIds.has(ref.instanceId)
+    if (!referencesUngatheredPipe && !referencesUngatheredInstance) return ref
+    return resolvePortRefWorldPosition(ref, state.instances, state.pipes, state.layers) ?? ref
+  }
+
+  const pipes = state.pipes
+    .filter((p) => pipeIds.has(p.instanceId))
+    .map((p) => {
+      const fromPort = openEndIfExternal(p.fromPort)
+      const toPort = openEndIfExternal(p.toPort)
+      return fromPort === p.fromPort && toPort === p.toPort ? p : { ...p, fromPort, toPort }
+    })
+
+  const leaderLines = state.leaderLines
+    .filter((l) => leaderLineIds.has(l.instanceId))
+    .map((l) => {
+      if (!isLeaderLineEndpointRef(l.from) || instanceIds.has(l.from.instanceId)) return l
+      const pos = resolveLeaderLineFromPosition(l.from, state.instances)
+      return pos ? { ...l, from: pos } : l
+    })
+
+  return {
+    instances: state.instances.filter((i) => instanceIds.has(i.instanceId)),
+    pipes,
+    freeShapes: state.freeShapes.filter((s) => shapeIds.has(s.instanceId)),
+    leaderLines,
+    groups: state.groups.filter((g) => g.groupId === state.selectedGroupId),
+  }
+}
+
+/**
+ * Two-pass clone of a gathered selection (or clipboard payload): pass 1
+ * gives every entity a fresh id/tag and shifts its geometry by `offset`,
+ * building an `idMap: Map<oldId, newId>` that spans instances/pipes/shapes/
+ * leaderLines (all UUIDs, safe to share one map across kinds). Pass 2
+ * rewrites cross-references through that map — pipe `fromPort`/`toPort`
+ * when `isPortRef`, leader-line `from` when it's a ref, and group members.
+ * Every ref reaching this point should already resolve in `idMap`:
+ * gatherSelectionAsEntitySet (the only place that builds a `source` for this
+ * function) already freezes any reference to something outside the gathered
+ * set into an open FreePoint end before this ever runs. The `?? ` fallback
+ * to the original id below is just a defensive no-op for that case, not the
+ * normal path — kept in case a payload from an older clipboard format (or
+ * anything else assembled by hand) somehow still contains one.
+ */
+function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipboardPayload {
+  const idMap = new Map<string, string>()
+
+  const instances = source.instances.map((inst) => {
+    const instanceId = crypto.randomUUID()
+    idMap.set(inst.instanceId, instanceId)
+    return {
+      ...inst,
+      instanceId,
+      tag: nextTag(inst.componentTypeId),
+      transform: { ...inst.transform, x: inst.transform.x + offset.x, y: inst.transform.y + offset.y },
+    }
+  })
+
+  const pipes = source.pipes.map((pipe) => {
+    const instanceId = crypto.randomUUID()
+    idMap.set(pipe.instanceId, instanceId)
+    return {
+      ...pipe,
+      instanceId,
+      tag: nextPipeTag(),
+      fromPort: isPortRef(pipe.fromPort)
+        ? pipe.fromPort
+        : { x: pipe.fromPort.x + offset.x, y: pipe.fromPort.y + offset.y },
+      toPort: isPortRef(pipe.toPort) ? pipe.toPort : { x: pipe.toPort.x + offset.x, y: pipe.toPort.y + offset.y },
+      waypoints: pipe.waypoints.map((wp) => ({ ...wp, x: wp.x + offset.x, y: wp.y + offset.y })),
+      // Neither is stable across edits anyway (see pipeGeometry.ts's own
+      // documented caveat) — volumeTag gets recomputed by
+      // recomputeVolumeTags, which every caller of cloneEntitySet runs on
+      // the resulting pipes array.
+      hopOverrides: {},
+      volumeTag: null,
+    }
+  })
+
+  const freeShapes = source.freeShapes.map((shape) => {
+    const instanceId = crypto.randomUUID()
+    idMap.set(shape.instanceId, instanceId)
+    return { ...shape, instanceId, points: shape.points.map((pt) => ({ x: pt.x + offset.x, y: pt.y + offset.y })) }
+  })
+
+  const leaderLines = source.leaderLines.map((line) => {
+    const instanceId = crypto.randomUUID()
+    idMap.set(line.instanceId, instanceId)
+    return {
+      ...line,
+      instanceId,
+      from: isLeaderLineEndpointRef(line.from) ? line.from : { x: line.from.x + offset.x, y: line.from.y + offset.y },
+      to: { x: line.to.x + offset.x, y: line.to.y + offset.y },
+      waypoints: line.waypoints.map((wp) => ({ x: wp.x + offset.x, y: wp.y + offset.y })),
+    }
+  })
+
+  // Pass 2 — every kind's clone id now exists in idMap, so refs can be
+  // resolved (or, for a ref outside the clone, deliberately left pointing
+  // at the original).
+  const remappedPipes = pipes.map((pipe) => ({
+    ...pipe,
+    fromPort: isPortRef(pipe.fromPort)
+      ? { ...pipe.fromPort, instanceId: idMap.get(pipe.fromPort.instanceId) ?? pipe.fromPort.instanceId }
+      : pipe.fromPort,
+    toPort: isPortRef(pipe.toPort)
+      ? { ...pipe.toPort, instanceId: idMap.get(pipe.toPort.instanceId) ?? pipe.toPort.instanceId }
+      : pipe.toPort,
+  }))
+  const remappedLeaderLines = leaderLines.map((line) => ({
+    ...line,
+    from: isLeaderLineEndpointRef(line.from)
+      ? { ...line.from, instanceId: idMap.get(line.from.instanceId) ?? line.from.instanceId }
+      : line.from,
+  }))
+  const remappedGroups = source.groups
+    .map((g) => ({
+      groupId: crypto.randomUUID(),
+      members: g.members
+        .map((m) => (idMap.has(m.id) ? { ...m, id: idMap.get(m.id)! } : null))
+        .filter((m): m is GroupMemberRef => m !== null),
+    }))
+    // Reuses stripDeletedGroupMembers's "<2 members drops the group"
+    // invariant — a group cloned alongside only some of its members can end
+    // up too small to remain meaningful.
+    .filter((g) => g.members.length >= 2)
+
+  return { instances, pipes: remappedPipes, freeShapes, leaderLines: remappedLeaderLines, groups: remappedGroups }
+}
+
 /**
  * Core of setGroupStyle/setSelectionStyle: fans a shared color-field change
  * out to whichever member kinds actually have that field — instances fan it
@@ -418,6 +614,25 @@ interface ProjectState {
   groupDragShapeOrigins: Record<string, Point[]> | null
   /** Free (non-role-anchored) leader-line points — 'from' when it's a plain point, 'to', and every waypoint — riding along with the current group drag, same shape as groupDragPipePoints. */
   groupDragLeaderLinePoints: { leaderLineId: string; point: 'from' | 'to' | number; origin: Point }[] | null
+  /**
+   * The clipboard text (JSON-stringified ScryClipboardEnvelope) behind the
+   * most recent paste, paired with the live ids it produced. Duplicate needs
+   * no equivalent: its "source" is always whatever's currently selected,
+   * which already IS the previous duplicate's own output by construction, so
+   * repeated Ctrl+D naturally chains without separately tracked state. Paste
+   * has no such loop — its source is a frozen clipboard snapshot that
+   * doesn't move on its own — so chaining "paste again, offset from wherever
+   * I dragged the last one" requires remembering that last paste's live ids
+   * explicitly.
+   */
+  lastPasteText: string | null
+  lastPastedIds: {
+    instanceIds: string[]
+    pipeIds: string[]
+    shapeIds: string[]
+    leaderLineIds: string[]
+    groupId: string | null
+  } | null
   past: HistorySnapshot[]
   future: HistorySnapshot[]
 
@@ -560,6 +775,12 @@ interface ProjectState {
   setSelectionStyle: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
   /** Deletes everything currently selected across all four categories at once, one undo step. */
   deleteSelection: () => void
+  /** Clones whatever is currently selected (instances/pipes/shapes/leaderLines/group), offset one grid cell right and down, and selects the clone — repeated Ctrl+D naturally stacks further each time since it always clones "current selection" and re-selects its own output. */
+  duplicateSelection: () => void
+  /** Snapshots the current selection to the real OS clipboard as a ScryClipboardEnvelope (no mutation, no history entry). No-ops on an empty selection. */
+  copySelectionToClipboard: () => void
+  /** Parses `text` as a ScryClipboardEnvelope and clones its payload into the project, offset one grid cell from its recorded position; silently no-ops on anything that isn't a valid envelope. Repeated Ctrl+V with the same clipboard text chains off the previous paste's own (possibly since-moved) clones instead of the frozen envelope payload — see lastPasteText/lastPastedIds. */
+  pasteFromClipboardText: (text: string) => void
 
   addImageLayer: (name: string, src: string, width: number, height: number) => void
   deleteLayer: (layerId: string) => void
@@ -651,6 +872,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   groupDragPipePoints: null,
   groupDragShapeOrigins: null,
   groupDragLeaderLinePoints: null,
+  lastPasteText: null,
+  lastPastedIds: null,
   past: [],
   future: [],
 
@@ -1749,6 +1972,115 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
         tagRenameError: null,
+      }
+    }),
+
+  duplicateSelection: () =>
+    set((state) => {
+      const source = gatherSelectionAsEntitySet(state)
+      const total = source.instances.length + source.pipes.length + source.freeShapes.length + source.leaderLines.length
+      if (total === 0) return {}
+      const clone = cloneEntitySet(source, { x: state.gridSize, y: state.gridSize })
+      return {
+        ...pushHistory(state),
+        instances: [...state.instances, ...clone.instances],
+        pipes: recomputeVolumeTags([...state.pipes, ...clone.pipes]),
+        freeShapes: [...state.freeShapes, ...clone.freeShapes],
+        leaderLines: [...state.leaderLines, ...clone.leaderLines],
+        groups: [...state.groups, ...clone.groups],
+        // Re-select the clone (same convention selectMixed/selectGroup use)
+        // — this is what makes repeated Ctrl+D stack: the next call's
+        // "current selection" is this call's output, with no extra state to
+        // track for it.
+        selectedInstanceIds: clone.instances.map((i) => i.instanceId),
+        selectedPipeIds: clone.pipes.map((p) => p.instanceId),
+        selectedShapeIds: clone.freeShapes.map((s) => s.instanceId),
+        selectedLeaderLineIds: clone.leaderLines.map((l) => l.instanceId),
+        selectedGroupId: clone.groups[0]?.groupId ?? null,
+        selectedRole: null,
+        selectedWaypoint: null,
+        selectedLeaderLinePoint: null,
+        tagRenameError: null,
+      }
+    }),
+
+  copySelectionToClipboard: () => {
+    const state = get()
+    const payload = gatherSelectionAsEntitySet(state)
+    const total = payload.instances.length + payload.pipes.length + payload.freeShapes.length + payload.leaderLines.length
+    // No-op on an empty selection so Ctrl+C with nothing selected doesn't
+    // clobber whatever the user already had on their OS clipboard.
+    if (total === 0) return
+    const envelope: ScryClipboardEnvelope = { scryClipboard: true, version: 1, payload }
+    navigator.clipboard.writeText(JSON.stringify(envelope)).catch((err) => {
+      // Clipboard writes can reject outside a secure/user-gesture context —
+      // log rather than throw so a stray Ctrl+C never crashes the app.
+      console.error('Failed to write to clipboard:', err)
+    })
+  },
+
+  pasteFromClipboardText: (text) =>
+    set((state) => {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        return {}
+      }
+      if (!isScryClipboardEnvelope(parsed)) return {}
+
+      // Repeated Ctrl+V with the *same* clipboard text (nothing new copied
+      // in between) chains off the previous paste's own live clones instead
+      // of re-cloning the frozen envelope payload — same PowerPoint-style
+      // stacking as duplicate, and it correctly follows the user if they
+      // dragged the last paste before pasting again. Falls back to the
+      // envelope's payload if those ids no longer resolve to anything (e.g.
+      // the previous paste was since deleted).
+      let source: ScryClipboardPayload | null = null
+      if (state.lastPasteText === text && state.lastPastedIds) {
+        const prev = state.lastPastedIds
+        const matched: ScryClipboardPayload = {
+          instances: state.instances.filter((i) => prev.instanceIds.includes(i.instanceId)),
+          pipes: state.pipes.filter((p) => prev.pipeIds.includes(p.instanceId)),
+          freeShapes: state.freeShapes.filter((s) => prev.shapeIds.includes(s.instanceId)),
+          leaderLines: state.leaderLines.filter((l) => prev.leaderLineIds.includes(l.instanceId)),
+          groups: state.groups.filter((g) => g.groupId === prev.groupId),
+        }
+        const matchedTotal =
+          matched.instances.length + matched.pipes.length + matched.freeShapes.length + matched.leaderLines.length
+        if (matchedTotal > 0) source = matched
+      }
+      if (!source) source = parsed.payload
+
+      const total = source.instances.length + source.pipes.length + source.freeShapes.length + source.leaderLines.length
+      if (total === 0) return {}
+
+      const clone = cloneEntitySet(source, { x: state.gridSize, y: state.gridSize })
+      const lastPastedIds = {
+        instanceIds: clone.instances.map((i) => i.instanceId),
+        pipeIds: clone.pipes.map((p) => p.instanceId),
+        shapeIds: clone.freeShapes.map((s) => s.instanceId),
+        leaderLineIds: clone.leaderLines.map((l) => l.instanceId),
+        groupId: clone.groups[0]?.groupId ?? null,
+      }
+      return {
+        ...pushHistory(state),
+        instances: [...state.instances, ...clone.instances],
+        pipes: recomputeVolumeTags([...state.pipes, ...clone.pipes]),
+        freeShapes: [...state.freeShapes, ...clone.freeShapes],
+        leaderLines: [...state.leaderLines, ...clone.leaderLines],
+        groups: [...state.groups, ...clone.groups],
+        selectedInstanceIds: lastPastedIds.instanceIds,
+        selectedPipeIds: lastPastedIds.pipeIds,
+        selectedShapeIds: lastPastedIds.shapeIds,
+        selectedLeaderLineIds: lastPastedIds.leaderLineIds,
+        selectedGroupId: lastPastedIds.groupId,
+        selectedRole: null,
+        selectedWaypoint: null,
+        selectedLeaderLinePoint: null,
+        tagRenameError: null,
+        lastPasteText: text,
+        lastPastedIds,
       }
     }),
 

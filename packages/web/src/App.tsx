@@ -144,6 +144,9 @@ export default function App() {
   const selectedGroupId = useProjectStore((s) => s.selectedGroupId)
   const createGroup = useProjectStore((s) => s.createGroup)
   const ungroup = useProjectStore((s) => s.ungroup)
+  const duplicateSelection = useProjectStore((s) => s.duplicateSelection)
+  const copySelectionToClipboard = useProjectStore((s) => s.copySelectionToClipboard)
+  const pasteFromClipboardText = useProjectStore((s) => s.pasteFromClipboardText)
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const toggleLayersPanel = useProjectStore((s) => s.toggleLayersPanel)
@@ -257,6 +260,22 @@ export default function App() {
         return
       }
 
+      if ((evt.ctrlKey || evt.metaKey) && (evt.key === 'c' || evt.key === 'C')) {
+        evt.preventDefault()
+        copySelectionToClipboard()
+        return
+      }
+
+      if ((evt.ctrlKey || evt.metaKey) && (evt.key === 'd' || evt.key === 'D')) {
+        evt.preventDefault()
+        duplicateSelection()
+        return
+      }
+
+      // Ctrl/Cmd+V is deliberately NOT handled here — see the separate
+      // 'paste' window listener effect below, which avoids the permission
+      // friction of proactively calling navigator.clipboard.readText().
+
       if (evt.key === 'Escape') {
         evt.preventDefault()
         // Always exits "entered" group-editing mode too, same as clicking
@@ -351,7 +370,28 @@ export default function App() {
     redo,
     createGroup,
     ungroup,
+    copySelectionToClipboard,
+    duplicateSelection,
   ])
+
+  useEffect(() => {
+    // Ctrl/Cmd+V is handled here, not in the keydown handler above, so the
+    // browser's native paste pipeline (and its clipboard permission model)
+    // still fires normally — this reads the text the native paste event
+    // already carries instead of proactively calling
+    // navigator.clipboard.readText(), which would prompt for clipboard-read
+    // permission on its own. Guarded with document.activeElement rather than
+    // evt.target since a window-level listener's event target isn't
+    // reliably the focused element, unlike a keydown handler's.
+    function onPaste(evt: ClipboardEvent) {
+      if (isTypingInField(document.activeElement)) return
+      const text = evt.clipboardData?.getData('text/plain')
+      if (!text) return
+      pasteFromClipboardText(text)
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [pasteFromClipboardText])
 
   return (
     <div className="app-shell">

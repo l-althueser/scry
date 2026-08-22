@@ -266,6 +266,46 @@ export interface Project {
   groups: Group[]
 }
 
+// --- Clipboard (copy/paste/duplicate) ---
+
+/**
+ * Ephemeral snapshot of "whatever was selected" at copy time — never
+ * persisted as part of a Project. Original ids are kept as-is; remapping to
+ * fresh ids only happens at paste/duplicate time (see cloneEntitySet in
+ * projectStore.ts), so the same copy can be pasted repeatedly into
+ * independent clones.
+ */
+export interface ScryClipboardPayload {
+  instances: ComponentInstance[]
+  pipes: PipeInstance[]
+  freeShapes: FreeShape[]
+  leaderLines: LeaderLine[]
+  /** 0 or 1 in practice — the selected group, if any. */
+  groups: Group[]
+}
+
+export interface ScryClipboardEnvelope {
+  scryClipboard: true
+  version: 1
+  payload: ScryClipboardPayload
+}
+
+/** Cheap shape check (marker + version + array fields present) so paste can silently no-op on foreign clipboard content (or content from an incompatible future version) instead of erroring. */
+export function isScryClipboardEnvelope(x: unknown): x is ScryClipboardEnvelope {
+  if (!x || typeof x !== 'object') return false
+  const env = x as Record<string, unknown>
+  if (env.scryClipboard !== true || env.version !== 1) return false
+  const payload = env.payload as Record<string, unknown> | null | undefined
+  if (!payload || typeof payload !== 'object') return false
+  return (
+    Array.isArray(payload.instances) &&
+    Array.isArray(payload.pipes) &&
+    Array.isArray(payload.freeShapes) &&
+    Array.isArray(payload.leaderLines) &&
+    Array.isArray(payload.groups)
+  )
+}
+
 // --- Component library ("Baukasten") ---
 
 export interface Port {
