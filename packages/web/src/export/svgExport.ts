@@ -11,6 +11,7 @@ import { exportLeaderLine } from '../leaderLines/leaderLineExport'
 import { getLeaderLinePoints } from '../leaderLines/leaderLineGeometry'
 import { exportPipeInstance } from '../pipes/pipeExport'
 import { getDisplayPoints, getPipePoints, type Point } from '../pipes/pipeGeometry'
+import { computeNameLabelPipeIds } from '../pipes/pipeVolumes'
 import { exportFreeShape } from '../shapes/freeShapeExport'
 import { boundsOfPoints } from '../shapes/freeShapeGeometry'
 
@@ -78,8 +79,9 @@ export function exportProjectToSvg(
       displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
     }
   }
+  const nameLabelPipeIds = computeNameLabelPipeIds(pipes)
   for (const pipe of pipes) {
-    lines.push(...exportPipeInstance(pipe, pipes, pointsByPipe, displayPointsByPipe))
+    lines.push(...exportPipeInstance(pipe, pipes, pointsByPipe, displayPointsByPipe, nameLabelPipeIds.has(pipe.instanceId)))
   }
 
   for (const inst of instances) {

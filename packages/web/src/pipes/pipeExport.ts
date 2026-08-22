@@ -20,13 +20,17 @@ import {
  * port/waypoint list (used for curved splines); `displayPointsByPipe` is the
  * per-mode rendering copy (orthogonal-expanded where applicable) used for
  * hop detection and the straight/orthogonal path itself — see
- * getDisplayPoints for why the two must stay separate.
+ * getDisplayPoints for why the two must stay separate. `isNameLabelPipe` —
+ * whether THIS pipe is the one chosen (via computeNameLabelPipeIds,
+ * pipeVolumes.ts) to render its volume's shared "_name" label; every other
+ * pipe in the same volume may also have nameEnabled but must not duplicate it.
  */
 export function exportPipeInstance(
   pipe: PipeInstance,
   allPipes: PipeInstance[],
   pointsByPipe: Map<string, Point[]>,
   displayPointsByPipe: Map<string, Point[]>,
+  isNameLabelPipe: boolean,
 ): string[] {
   const points = pointsByPipe.get(pipe.instanceId)
   const displayPoints = displayPointsByPipe.get(pipe.instanceId)
@@ -52,7 +56,7 @@ export function exportPipeInstance(
     )
   }
 
-  if (pipe.nameEnabled) {
+  if (pipe.nameEnabled && isNameLabelPipe) {
     // Same bare-text style as a component instance's `name` role
     // (createLabelBoxElement's non-box branch) — direct <text> child, no
     // box. Text is the pipe's *volume* tag, same as "_indicator" above.

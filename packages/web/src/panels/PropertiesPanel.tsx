@@ -398,13 +398,16 @@ export function PropertiesPanel() {
           <p className="field-hint">
             {pipe.indicatorEnabled ? (
               <>
-                Exports as <code>{resolveIndicatorTag(pipe)}_indicator</code> — a small dot at the
-                pipe&apos;s midpoint. Every indicator-enabled pipe in this volume shares that id, so
-                coloring it in Node-RED lights up the whole connected run.
+                Exports as <code>{resolveIndicatorTag(pipe)}_indicator</code> — a small dot at each
+                connected segment&apos;s own midpoint, all sharing that id, so coloring it in Node-RED
+                lights up the whole connected run at once.
               </>
             ) : (
               "Currently just a decorative line — Node-RED can't target it."
-            )}
+            )}{' '}
+            {volumeSiblings.length > 1
+              ? `Toggling this applies to all ${volumeSiblings.length} pipes in this connected run, not just this segment.`
+              : null}
           </p>
 
           <ColorPickerRow
@@ -415,7 +418,7 @@ export function PropertiesPanel() {
           />
           <p className="field-hint">
             {pipe.strokeColor
-              ? 'Custom color overrides the default.'
+              ? `Custom color${volumeSiblings.length > 1 ? ' — applies to the whole connected run' : ''} overrides the default.`
               : pipe.indicatorEnabled
                 ? 'Default: black (indicator enabled).'
                 : 'Default: light gray (no indicator, purely decorative).'}
@@ -430,8 +433,10 @@ export function PropertiesPanel() {
             show name label (_name)
           </label>
           <p className="field-hint">
-            Bare text at the pipe&apos;s midpoint, showing <code>{resolveIndicatorTag(pipe)}</code> — the
-            volume tag, same as above, so it labels the whole connected run rather than just this segment.
+            Bare text showing <code>{resolveIndicatorTag(pipe)}</code> — the volume tag, same as above.
+            {volumeSiblings.length > 1
+              ? ` This run has ${volumeSiblings.length} connected segments; toggling this applies to all of them, but only one shows the label (at whichever segment has the most waypoints) instead of one per segment.`
+              : " Shown at this pipe's midpoint."}
           </p>
         </fieldset>
 

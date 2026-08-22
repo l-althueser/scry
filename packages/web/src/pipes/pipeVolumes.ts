@@ -76,3 +76,45 @@ export function computePipeVolumeGroups(pipes: PipeInstance[]): PipeInstance[][]
   }
   return [...groups.values()]
 }
+
+/**
+ * Expands `ids` to include every pipe sharing a volumeTag with any pipe
+ * already in `ids` — a connected run's indicator/name/color are really one
+ * shared thing (see PipeInstance.indicatorEnabled/nameEnabled/strokeColor
+ * and recomputeVolumeTags in projectStore.ts), so any setter touching one
+ * of those fields on one pipe needs to apply to its whole run, not just the
+ * pipe that happened to be clicked/selected.
+ */
+export function expandToVolumeSiblings(pipes: PipeInstance[], ids: ReadonlySet<string>): Set<string> {
+  const volumeTags = new Set(pipes.filter((p) => ids.has(p.instanceId) && p.volumeTag).map((p) => p.volumeTag!))
+  return new Set(
+    pipes.filter((p) => ids.has(p.instanceId) || (p.volumeTag && volumeTags.has(p.volumeTag))).map((p) => p.instanceId),
+  )
+}
+
+/**
+ * For every volume with `nameEnabled` on for at least one member, the
+ * single pipe that should actually render the shared "_name" label — the
+ * one with the most waypoints (a proxy for "the main trunk" of a branching
+ * run), tie-broken by instanceId for determinism. Every other pipe in that
+ * volume still carries `nameEnabled: true` (kept in sync across the whole
+ * volume — see recomputeVolumeTags) but must not render its own duplicate
+ * label; unlike the indicator dot, which deliberately stays one-per-pipe
+ * (multiple status dots along a long run aid visibility — a repeated name
+ * label is just clutter).
+ */
+export function computeNameLabelPipeIds(pipes: PipeInstance[]): Set<string> {
+  const groups = computePipeVolumeGroups(pipes)
+  const result = new Set<string>()
+  for (const group of groups) {
+    if (!group.some((p) => p.nameEnabled)) continue
+    const primary = group.reduce((best, p) =>
+      p.waypoints.length > best.waypoints.length ||
+      (p.waypoints.length === best.waypoints.length && p.instanceId < best.instanceId)
+        ? p
+        : best,
+    )
+    result.add(primary.instanceId)
+  }
+  return result
+}

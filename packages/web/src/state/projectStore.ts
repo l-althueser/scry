@@ -32,7 +32,7 @@ import type { Tool, Point } from '../canvas/SvgCanvas'
 import * as api from '../api/client'
 import { exportProjectToSvg } from '../export/svgExport'
 import { downloadTextFile } from '../export/downloadFile'
-import { computePipeVolumeGroups } from '../pipes/pipeVolumes'
+import { computePipeVolumeGroups, expandToVolumeSiblings } from '../pipes/pipeVolumes'
 import {
   detachPipesFromInstances,
   getPipePoints,
@@ -130,17 +130,40 @@ function recomputeVolumeTags(pipes: PipeInstance[]): PipeInstance[] {
   // biggest remaining fragment is the best guess for "still the same
   // volume" — so on a collision only the smaller fragment gets a fresh tag.
   const bySizeDesc = [...groups].sort((a, b) => b.length - a.length)
+  // Reconciled alongside the tag itself: a volume's indicator/name/color are
+  // one shared thing (see expandToVolumeSiblings), so whenever topology
+  // changes bring pipes together into (or apart from) a group, their flags
+  // need to end up consistent too — same OR/first-non-null merge rule
+  // mergeFreeEndChains already uses for the simpler 2-pipe "continuing a
+  // draw" case, generalized here to an arbitrary-size group.
+  const indicatorByPipeId = new Map<string, boolean>()
+  const nameByPipeId = new Map<string, boolean>()
+  const colorByPipeId = new Map<string, string | null>()
   for (const group of bySizeDesc) {
     const existingTags = Array.from(new Set(group.map((p) => p.volumeTag).filter((t): t is string => !!t))).sort(
       compareTagNumbers,
     )
     const tag = existingTags.find((t) => !usedTags.has(t)) ?? nextVolumeTag()
     usedTags.add(tag)
-    for (const p of group) tagByPipeId.set(p.instanceId, tag)
+    const indicatorEnabled = group.some((p) => p.indicatorEnabled)
+    const nameEnabled = group.some((p) => p.nameEnabled)
+    const strokeColor = group.find((p) => p.strokeColor)?.strokeColor ?? null
+    for (const p of group) {
+      tagByPipeId.set(p.instanceId, tag)
+      indicatorByPipeId.set(p.instanceId, indicatorEnabled)
+      nameByPipeId.set(p.instanceId, nameEnabled)
+      colorByPipeId.set(p.instanceId, strokeColor)
+    }
   }
   return pipes.map((p) => {
     const tag = tagByPipeId.get(p.instanceId)
-    return tag && tag !== p.volumeTag ? { ...p, volumeTag: tag } : p
+    const indicatorEnabled = indicatorByPipeId.get(p.instanceId) ?? p.indicatorEnabled
+    const nameEnabled = nameByPipeId.get(p.instanceId) ?? p.nameEnabled
+    const strokeColor = colorByPipeId.has(p.instanceId) ? colorByPipeId.get(p.instanceId)! : p.strokeColor
+    const nextTag = tag && tag !== p.volumeTag ? tag : p.volumeTag
+    return nextTag === p.volumeTag && indicatorEnabled === p.indicatorEnabled && nameEnabled === p.nameEnabled && strokeColor === p.strokeColor
+      ? p
+      : { ...p, volumeTag: nextTag, indicatorEnabled, nameEnabled, strokeColor }
   })
 }
 
@@ -508,7 +531,12 @@ function applyStyleFieldToIds(
     ),
     pipes:
       field === 'stroke'
-        ? state.pipes.map((p) => (ids.pipeIds.has(p.instanceId) ? { ...p, strokeColor: value } : p))
+        ? (() => {
+            // Expanded to volume siblings, same as setPipeColor — a
+            // connected run's color is one shared thing, not per-segment.
+            const expanded = expandToVolumeSiblings(state.pipes, ids.pipeIds)
+            return state.pipes.map((p) => (expanded.has(p.instanceId) ? { ...p, strokeColor: value } : p))
+          })()
         : state.pipes,
     freeShapes:
       field === 'fill' || field === 'stroke'
@@ -533,7 +561,11 @@ function applyPipeFlagToIds(
   field: 'indicatorEnabled' | 'nameEnabled',
   value: boolean,
 ): PipeInstance[] {
-  return pipes.map((p) => (pipeIds.has(p.instanceId) ? { ...p, [field]: value } : p))
+  // Expanded to volume siblings, same as setPipeIndicatorEnabled/
+  // setPipeNameEnabled — a bulk action on part of a selection shouldn't
+  // leave an unselected sibling pipe out of sync with the rest of its run.
+  const expanded = expandToVolumeSiblings(pipes, pipeIds)
+  return pipes.map((p) => (expanded.has(p.instanceId) ? { ...p, [field]: value } : p))
 }
 
 /**
@@ -1592,23 +1624,35 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }),
 
+  // These three fan out to every pipe sharing this one's volumeTag — a
+  // connected run's indicator/name/color are one shared thing (see
+  // expandToVolumeSiblings), not a per-segment setting.
   setPipeIndicatorEnabled: (pipeId, enabled) =>
-    set((state) => ({
-      ...pushHistory(state),
-      pipes: state.pipes.map((p) => (p.instanceId === pipeId ? { ...p, indicatorEnabled: enabled } : p)),
-    })),
+    set((state) => {
+      const ids = expandToVolumeSiblings(state.pipes, new Set([pipeId]))
+      return {
+        ...pushHistory(state),
+        pipes: state.pipes.map((p) => (ids.has(p.instanceId) ? { ...p, indicatorEnabled: enabled } : p)),
+      }
+    }),
 
   setPipeNameEnabled: (pipeId, enabled) =>
-    set((state) => ({
-      ...pushHistory(state),
-      pipes: state.pipes.map((p) => (p.instanceId === pipeId ? { ...p, nameEnabled: enabled } : p)),
-    })),
+    set((state) => {
+      const ids = expandToVolumeSiblings(state.pipes, new Set([pipeId]))
+      return {
+        ...pushHistory(state),
+        pipes: state.pipes.map((p) => (ids.has(p.instanceId) ? { ...p, nameEnabled: enabled } : p)),
+      }
+    }),
 
   setPipeColor: (pipeId, color) =>
-    set((state) => ({
-      ...pushHistory(state),
-      pipes: state.pipes.map((p) => (p.instanceId === pipeId ? { ...p, strokeColor: color } : p)),
-    })),
+    set((state) => {
+      const ids = expandToVolumeSiblings(state.pipes, new Set([pipeId]))
+      return {
+        ...pushHistory(state),
+        pipes: state.pipes.map((p) => (ids.has(p.instanceId) ? { ...p, strokeColor: color } : p)),
+      }
+    }),
 
   setPipeRoutingMode: (pipeId, mode) =>
     set((state) => ({

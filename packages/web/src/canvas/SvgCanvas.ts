@@ -32,6 +32,7 @@ import {
   rotatePoint,
 } from '../library'
 import { nearestPointOnPolylineIndexed } from '../geometry/polyline'
+import { computeNameLabelPipeIds } from '../pipes/pipeVolumes'
 import {
   computeHopsForPipe,
   curvedPathD,
@@ -2804,6 +2805,7 @@ export class SvgCanvas {
         displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
       }
     }
+    const nameLabelPipeIds = computeNameLabelPipeIds(pipes)
 
     for (const pipe of pipes) {
       seen.add(pipe.instanceId)
@@ -2874,7 +2876,10 @@ export class SvgCanvas {
 
       // Text is the pipe's *volume* tag, same as "_indicator" above — labels
       // the connected run, not just this one segment (see PipeInstance.nameEnabled).
-      nameText.style.display = pipe.nameEnabled ? '' : 'none'
+      // Only the one pipe computeNameLabelPipeIds picked for this volume
+      // actually shows it, even though every pipe in the volume has
+      // nameEnabled kept in sync — one label per run, not one per segment.
+      nameText.style.display = pipe.nameEnabled && nameLabelPipeIds.has(pipe.instanceId) ? '' : 'none'
       nameText.id = `${resolveIndicatorTag(pipe)}_name`
       nameText.textContent = resolveIndicatorTag(pipe)
       nameText.setAttribute('x', String(mid.x))
