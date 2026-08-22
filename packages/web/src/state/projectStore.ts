@@ -6,6 +6,8 @@ import {
   type FreeShape,
   type FreeShapeKind,
   type FreeShapeStyle,
+  type Group,
+  type GroupMemberRef,
   type ImageConnectionPoint,
   type ImageLayer,
   type Layer,
@@ -223,12 +225,105 @@ function mergeFreeEndChains(pipes: PipeInstance[]): { pipes: PipeInstance[]; res
   return { pipes: current, resolveId }
 }
 
+/**
+ * Strips references to just-deleted instances/pipes/shapes/leader lines out
+ * of every group's member list, and drops any group left with fewer than 2
+ * members afterward (a "group" of 0 or 1 is meaningless). Used by every
+ * per-category delete action so a group never accumulates stale ids when one
+ * of its members is deleted outside the whole-group `deleteGroup` path —
+ * one shared helper instead of four near-identical filter blocks.
+ */
+function stripDeletedGroupMembers(
+  groups: Group[],
+  removedByKind: Partial<Record<GroupMemberRef['kind'], Set<string>>>,
+): Group[] {
+  return groups
+    .map((g) => ({
+      ...g,
+      members: g.members.filter((m) => !removedByKind[m.kind]?.has(m.id)),
+    }))
+    .filter((g) => g.members.length >= 2)
+}
+
+/** If `selectedGroupId` no longer names a group in `groups` (deleted or dissolved by stripDeletedGroupMembers), clears it — a stale group selection would otherwise silently keep pointing at nothing. */
+function clearSelectedGroupIfGone(groups: Group[], selectedGroupId: string | null): string | null {
+  if (!selectedGroupId) return null
+  return groups.some((g) => g.groupId === selectedGroupId) ? selectedGroupId : null
+}
+
+/**
+ * Core of setGroupStyle/setSelectionStyle: fans a shared color-field change
+ * out to whichever member kinds actually have that field — instances fan it
+ * to every one of their roles (there's no instance-level color, only
+ * per-role — see RoleInstance), pipes only have a stroke (strokeColor),
+ * shapes have both fill and stroke but no text color, and leader lines have
+ * no style fields at all so they're silently unaffected by any field.
+ * Shared between the persisted-group and loose-multi-select editors so both
+ * broadcast identically.
+ */
+function applyStyleFieldToIds(
+  state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes'>,
+  ids: { instanceIds: Set<string>; pipeIds: Set<string>; shapeIds: Set<string> },
+  field: 'fill' | 'stroke' | 'text',
+  value: string | null,
+): Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes'> {
+  const roleKey = field === 'fill' ? 'fillColor' : field === 'stroke' ? 'strokeColor' : 'textColor'
+  return {
+    instances: state.instances.map((inst) =>
+      ids.instanceIds.has(inst.instanceId)
+        ? { ...inst, roles: inst.roles.map((r) => ({ ...r, [roleKey]: value })) }
+        : inst,
+    ),
+    pipes:
+      field === 'stroke'
+        ? state.pipes.map((p) => (ids.pipeIds.has(p.instanceId) ? { ...p, strokeColor: value } : p))
+        : state.pipes,
+    freeShapes:
+      field === 'fill' || field === 'stroke'
+        ? state.freeShapes.map((s) =>
+            ids.shapeIds.has(s.instanceId) ? { ...s, style: { ...s.style, [field]: value } } : s,
+          )
+        : state.freeShapes,
+  }
+}
+
+/**
+ * Core of deleteGroup/deleteSelection: removes the given ids from every
+ * project array in one pass and strips them out of any Group.members list
+ * that referenced them, so a group never accumulates stale ids when one of
+ * its members is deleted via a path other than deleteGroup itself.
+ */
+function computeMixedDeletion(
+  state: Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'groups'>,
+  ids: { instanceIds: Set<string>; pipeIds: Set<string>; shapeIds: Set<string>; leaderLineIds: Set<string> },
+): Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'groups'> {
+  return {
+    instances: state.instances.filter((inst) => !ids.instanceIds.has(inst.instanceId)),
+    pipes: recomputeVolumeTags(
+      detachPipesFromInstances(state.pipes, state.instances, ids.instanceIds).filter(
+        (p) => !ids.pipeIds.has(p.instanceId),
+      ),
+    ),
+    leaderLines: detachLeaderLinesFromInstances(state.leaderLines, state.instances, ids.instanceIds).filter(
+      (l) => !ids.leaderLineIds.has(l.instanceId),
+    ),
+    freeShapes: state.freeShapes.filter((s) => !ids.shapeIds.has(s.instanceId)),
+    groups: stripDeletedGroupMembers(state.groups, {
+      instance: ids.instanceIds,
+      pipe: ids.pipeIds,
+      shape: ids.shapeIds,
+      leaderLine: ids.leaderLineIds,
+    }),
+  }
+}
+
 interface HistorySnapshot {
   instances: ComponentInstance[]
   pipes: PipeInstance[]
   freeShapes: FreeShape[]
   layers: Layer[]
   leaderLines: LeaderLine[]
+  groups: Group[]
 }
 
 const MAX_HISTORY = 100
@@ -244,7 +339,7 @@ const MAX_HISTORY = 100
  * update, or a single visual drag would take many Ctrl+Z presses to undo.
  */
 function pushHistory(
-  state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes' | 'layers' | 'leaderLines' | 'past'>,
+  state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes' | 'layers' | 'leaderLines' | 'groups' | 'past'>,
 ): Pick<ProjectState, 'past' | 'future'> {
   const snapshot = snapshotOf(state)
   const past = [...state.past, snapshot]
@@ -253,7 +348,7 @@ function pushHistory(
 }
 
 function snapshotOf(
-  state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes' | 'layers' | 'leaderLines'>,
+  state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes' | 'layers' | 'leaderLines' | 'groups'>,
 ): HistorySnapshot {
   return {
     instances: state.instances,
@@ -261,6 +356,7 @@ function snapshotOf(
     freeShapes: state.freeShapes,
     layers: state.layers,
     leaderLines: state.leaderLines,
+    groups: state.groups,
   }
 }
 
@@ -300,6 +396,9 @@ interface ProjectState {
   selectedLeaderLinePoint: { leaderLineId: string; point: 'from' | 'to' | number } | null
   layers: Layer[]
   selectedLayerId: string | null
+  groups: Group[]
+  /** Non-null means the four selection arrays above currently equal exactly one group's membership, selected as a unit (see selectGroup). */
+  selectedGroupId: string | null
   /** Drives the layers list view in the (right) properties panel — toggled from a toolbar button, since there's no dedicated left-hand layers panel anymore. */
   layersPanelOpen: boolean
   /** Shared by the width/height panel fields and the canvas corner-drag handles, so both respect the same lock. */
@@ -315,6 +414,10 @@ interface ProjectState {
   groupDragOrigins: Record<string, Point> | null
   /** Free pipe knots riding along with the current group drag — see beginGroupDrag's doc comment. */
   groupDragPipePoints: { pipeId: string; point: 'from' | 'to' | number; origin: Point }[] | null
+  /** Full points-array origin per selected shape riding along with the current group drag. */
+  groupDragShapeOrigins: Record<string, Point[]> | null
+  /** Free (non-role-anchored) leader-line points — 'from' when it's a plain point, 'to', and every waypoint — riding along with the current group drag, same shape as groupDragPipePoints. */
+  groupDragLeaderLinePoints: { leaderLineId: string; point: 'from' | 'to' | number; origin: Point }[] | null
   past: HistorySnapshot[]
   future: HistorySnapshot[]
 
@@ -433,6 +536,31 @@ interface ProjectState {
   selectLeaderLines: (leaderLineIds: string[]) => void
   selectLeaderLinePoint: (selection: { leaderLineId: string; point: 'from' | 'to' | number } | null) => void
 
+  /**
+   * Sets all four selection-category arrays at once, without the mutual
+   * clearing that selectInstances/selectPipes/selectShapes/selectLeaderLines
+   * each do for their own single-category click use case — needed so a
+   * marquee box that catches a genuine mix (e.g. a component and a pipe
+   * together) can keep all of them selected together (see SvgCanvas's
+   * finalizeBoxSelect), instead of whichever category's own select action
+   * happens to run last wiping out the others.
+   */
+  selectMixed: (selection: { instanceIds: string[]; pipeIds: string[]; shapeIds: string[]; leaderLineIds: string[] }) => void
+  /** Selects an existing group as a unit: partitions its members into the four selection arrays and sets selectedGroupId. */
+  selectGroup: (groupId: string) => void
+  /** Groups the current contents of the four selection arrays (2+ members required). Flattens/merges in any already-selected whole group(s) instead of nesting. Selects the new group. */
+  createGroup: () => void
+  /** Removes the Group record; the four selection arrays are left as a loose multi-select (selectedGroupId cleared). */
+  ungroup: (groupId: string) => void
+  /** Deletes every member of the group plus the Group record itself, atomically (one undo step). */
+  deleteGroup: (groupId: string) => void
+  /** Fans a shared color-field change out to every member of a matching kind, one undo step for the whole group. */
+  setGroupStyle: (groupId: string, field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  /** Same broadcast as setGroupStyle, but for whatever is currently selected across the four arrays — no persisted Group required. */
+  setSelectionStyle: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  /** Deletes everything currently selected across all four categories at once, one undo step. */
+  deleteSelection: () => void
+
   addImageLayer: (name: string, src: string, width: number, height: number) => void
   deleteLayer: (layerId: string) => void
   renameLayer: (layerId: string, name: string) => void
@@ -508,6 +636,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   selectedLeaderLinePoint: null,
   layers: [DEFAULT_VECTOR_LAYER],
   selectedLayerId: null,
+  groups: [],
+  selectedGroupId: null,
   layersPanelOpen: false,
   imageAspectLocked: true,
   tool: 'select',
@@ -519,6 +649,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   routeError: null,
   groupDragOrigins: null,
   groupDragPipePoints: null,
+  groupDragShapeOrigins: null,
+  groupDragLeaderLinePoints: null,
   past: [],
   future: [],
 
@@ -600,6 +732,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   deleteInstance: (instanceId) =>
     set((state) => {
       const removed = new Set([instanceId])
+      const groups = stripDeletedGroupMembers(state.groups, { instance: removed })
       return {
         ...pushHistory(state),
         instances: state.instances.filter((inst) => inst.instanceId !== instanceId),
@@ -611,6 +744,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         leaderLines: detachLeaderLinesFromInstances(state.leaderLines, state.instances, removed),
         selectedInstanceIds: state.selectedInstanceIds.filter((id) => id !== instanceId),
         selectedRole: state.selectedRole?.instanceId === instanceId ? null : state.selectedRole,
+        groups,
+        selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
         tagRenameError: null,
       }
     }),
@@ -618,6 +753,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   deleteInstances: (instanceIds) =>
     set((state) => {
       const removed = new Set(instanceIds)
+      const groups = stripDeletedGroupMembers(state.groups, { instance: removed })
       return {
         ...pushHistory(state),
         instances: state.instances.filter((inst) => !removed.has(inst.instanceId)),
@@ -626,6 +762,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedInstanceIds: state.selectedInstanceIds.filter((id) => !removed.has(id)),
         selectedRole:
           state.selectedRole && removed.has(state.selectedRole.instanceId) ? null : state.selectedRole,
+        groups,
+        selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
         tagRenameError: null,
       }
     }),
@@ -757,19 +895,71 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           origins[inst.instanceId] = { x: inst.transform.x, y: inst.transform.y }
         }
       }
+
+      // Free (unattached) pipe points to carry along: the explicit
+      // `pipePoints` list (knots caught alongside instances in a box-select
+      // — "marked like elements", see companionPipePoints in SvgCanvas) plus
+      // every free end/waypoint of any pipe that is ITSELF part of the
+      // current selection (a pipe can now be a group member in its own
+      // right, not just an instance's companion knot) — a selected pipe's
+      // attached ends already track their component live and need no help,
+      // only its free ones do. Deduped so a knot named in both sources is
+      // only captured once.
       const pipePointOrigins: { pipeId: string; point: 'from' | 'to' | number; origin: Point }[] = []
-      for (const ref of pipePoints) {
-        const pipe = state.pipes.find((p) => p.instanceId === ref.pipeId)
-        if (!pipe) continue
+      const capturedPipeRefs = new Set<string>()
+      const capturePipeRef = (pipeId: string, point: 'from' | 'to' | number) => {
+        const key = `${pipeId}:${point}`
+        if (capturedPipeRefs.has(key)) return
+        capturedPipeRefs.add(key)
+        const pipe = state.pipes.find((p) => p.instanceId === pipeId)
+        if (!pipe) return
         const origin =
-          ref.point === 'from'
+          point === 'from'
             ? (!isPortRef(pipe.fromPort) ? pipe.fromPort : null)
-            : ref.point === 'to'
+            : point === 'to'
               ? (!isPortRef(pipe.toPort) ? pipe.toPort : null)
-              : (pipe.waypoints[ref.point] ?? null)
-        if (origin) pipePointOrigins.push({ ...ref, origin: { x: origin.x, y: origin.y } })
+              : (pipe.waypoints[point] ?? null)
+        if (origin) pipePointOrigins.push({ pipeId, point, origin: { x: origin.x, y: origin.y } })
       }
-      return { ...pushHistory(state), groupDragOrigins: origins, groupDragPipePoints: pipePointOrigins }
+      for (const ref of pipePoints) capturePipeRef(ref.pipeId, ref.point)
+      for (const pipeId of state.selectedPipeIds) {
+        const pipe = state.pipes.find((p) => p.instanceId === pipeId)
+        if (!pipe) continue
+        if (!isPortRef(pipe.fromPort)) capturePipeRef(pipeId, 'from')
+        if (!isPortRef(pipe.toPort)) capturePipeRef(pipeId, 'to')
+        pipe.waypoints.forEach((_, idx) => capturePipeRef(pipeId, idx))
+      }
+
+      // Selected shapes move as a rigid translation of their whole points array.
+      const shapeOrigins: Record<string, Point[]> = {}
+      for (const shape of state.freeShapes) {
+        if (state.selectedShapeIds.includes(shape.instanceId)) {
+          shapeOrigins[shape.instanceId] = shape.points.map((p) => ({ x: p.x, y: p.y }))
+        }
+      }
+
+      // Selected leader lines: every waypoint, the `to` endpoint, and `from`
+      // only when it's a bare point (a role-anchored `from` already tracks
+      // its label live, same reasoning as an attached pipe port above).
+      const leaderLinePointOrigins: { leaderLineId: string; point: 'from' | 'to' | number; origin: Point }[] = []
+      for (const line of state.leaderLines) {
+        if (!state.selectedLeaderLineIds.includes(line.instanceId)) continue
+        if (!('instanceId' in line.from)) {
+          leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: 'from', origin: { x: line.from.x, y: line.from.y } })
+        }
+        leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: 'to', origin: { x: line.to.x, y: line.to.y } })
+        line.waypoints.forEach((wp, idx) => {
+          leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: idx, origin: { x: wp.x, y: wp.y } })
+        })
+      }
+
+      return {
+        ...pushHistory(state),
+        groupDragOrigins: origins,
+        groupDragPipePoints: pipePointOrigins,
+        groupDragShapeOrigins: Object.keys(shapeOrigins).length > 0 ? shapeOrigins : null,
+        groupDragLeaderLinePoints: leaderLinePointOrigins,
+      }
     }),
 
   applyGroupDrag: (delta) =>
@@ -799,8 +989,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               return next
             })
           : state.pipes
+
+      const shapeOrigins = state.groupDragShapeOrigins
+      const freeShapes = shapeOrigins
+        ? state.freeShapes.map((shape) => {
+            const shapeOrigin = shapeOrigins[shape.instanceId]
+            if (!shapeOrigin) return shape
+            return { ...shape, points: shapeOrigin.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })) }
+          })
+        : state.freeShapes
+
+      const leaderLinePointOrigins = state.groupDragLeaderLinePoints
+      const leaderLines =
+        leaderLinePointOrigins && leaderLinePointOrigins.length > 0
+          ? state.leaderLines.map((line) => {
+              const refs = leaderLinePointOrigins.filter((r) => r.leaderLineId === line.instanceId)
+              if (refs.length === 0) return line
+              let next = line
+              for (const ref of refs) {
+                const pos = { x: ref.origin.x + delta.x, y: ref.origin.y + delta.y }
+                if (ref.point === 'from') next = { ...next, from: pos }
+                else if (ref.point === 'to') next = { ...next, to: pos }
+                else next = { ...next, waypoints: next.waypoints.map((wp, i) => (i === ref.point ? pos : wp)) }
+              }
+              return next
+            })
+          : state.leaderLines
+
       return {
         pipes,
+        freeShapes,
+        leaderLines,
         instances: state.instances.map((inst) => {
           const origin = origins[inst.instanceId]
           if (!origin) return inst
@@ -809,7 +1028,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }),
 
-  endGroupDrag: () => set({ groupDragOrigins: null, groupDragPipePoints: null }),
+  endGroupDrag: () =>
+    set({
+      groupDragOrigins: null,
+      groupDragPipePoints: null,
+      groupDragShapeOrigins: null,
+      groupDragLeaderLinePoints: null,
+    }),
 
   selectInstances: (instanceIds) =>
     set({
@@ -821,6 +1046,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedLayerId: instanceIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLineIds: instanceIds.length > 0 ? [] : get().selectedLeaderLineIds,
       selectedLeaderLinePoint: instanceIds.length > 0 ? null : get().selectedLeaderLinePoint,
+      selectedGroupId: null,
       tagRenameError: null,
     }),
 
@@ -834,6 +1060,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedLayerId: null,
       selectedLeaderLineIds: [],
       selectedLeaderLinePoint: null,
+      selectedGroupId: null,
       tagRenameError: null,
     })),
 
@@ -935,9 +1162,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         freeShapes: previous.freeShapes,
         layers: previous.layers,
         leaderLines: previous.leaderLines,
+        groups: previous.groups,
         // Old selections may point at instances/pipes/shapes that no longer
         // exist (or exist again) after rewinding — simplest correct behavior
-        // is to just clear them rather than try to reconcile.
+        // is to just clear them rather than try to reconcile. Same reasoning
+        // for selectedGroupId: a rewound group's membership may no longer
+        // match what the four arrays would need to be.
         selectedInstanceIds: [],
         selectedRole: null,
         selectedPipeIds: [],
@@ -945,6 +1175,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedShapeIds: [],
         selectedLayerId: null,
         selectedLeaderLineIds: [],
+        selectedGroupId: null,
         tagRenameError: null,
       }
     }),
@@ -961,6 +1192,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         freeShapes: next.freeShapes,
         layers: next.layers,
         leaderLines: next.leaderLines,
+        groups: next.groups,
         selectedInstanceIds: [],
         selectedRole: null,
         selectedPipeIds: [],
@@ -968,6 +1200,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedShapeIds: [],
         selectedLayerId: null,
         selectedLeaderLineIds: [],
+        selectedGroupId: null,
         tagRenameError: null,
       }
     }),
@@ -1001,15 +1234,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
 
   deletePipes: (pipeIds) =>
-    set((state) => ({
-      ...pushHistory(state),
-      pipes: recomputeVolumeTags(state.pipes.filter((p) => !pipeIds.includes(p.instanceId))),
-      selectedPipeIds: state.selectedPipeIds.filter((id) => !pipeIds.includes(id)),
-      selectedWaypoint:
-        state.selectedWaypoint && pipeIds.includes(state.selectedWaypoint.pipeId)
-          ? null
-          : state.selectedWaypoint,
-    })),
+    set((state) => {
+      const groups = stripDeletedGroupMembers(state.groups, { pipe: new Set(pipeIds) })
+      return {
+        ...pushHistory(state),
+        pipes: recomputeVolumeTags(state.pipes.filter((p) => !pipeIds.includes(p.instanceId))),
+        selectedPipeIds: state.selectedPipeIds.filter((id) => !pipeIds.includes(id)),
+        selectedWaypoint:
+          state.selectedWaypoint && pipeIds.includes(state.selectedWaypoint.pipeId)
+            ? null
+            : state.selectedWaypoint,
+        groups,
+        selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
+      }
+    }),
 
   renamePipeTag: (pipeId, newTag) =>
     set((state) => {
@@ -1184,6 +1422,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedLayerId: pipeIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLineIds: pipeIds.length > 0 ? [] : get().selectedLeaderLineIds,
       selectedLeaderLinePoint: pipeIds.length > 0 ? null : get().selectedLeaderLinePoint,
+      selectedGroupId: null,
       tagRenameError: null,
       routeError: null,
     }),
@@ -1215,11 +1454,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
 
   deleteShapes: (shapeIds) =>
-    set((state) => ({
-      ...pushHistory(state),
-      freeShapes: state.freeShapes.filter((s) => !shapeIds.includes(s.instanceId)),
-      selectedShapeIds: state.selectedShapeIds.filter((id) => !shapeIds.includes(id)),
-    })),
+    set((state) => {
+      const groups = stripDeletedGroupMembers(state.groups, { shape: new Set(shapeIds) })
+      return {
+        ...pushHistory(state),
+        freeShapes: state.freeShapes.filter((s) => !shapeIds.includes(s.instanceId)),
+        selectedShapeIds: state.selectedShapeIds.filter((id) => !shapeIds.includes(id)),
+        groups,
+        selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
+      }
+    }),
 
   moveShape: (shapeId, points) =>
     set((state) => ({
@@ -1261,6 +1505,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedWaypoint: null,
       selectedLayerId: shapeIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLineIds: shapeIds.length > 0 ? [] : get().selectedLeaderLineIds,
+      selectedGroupId: null,
       tagRenameError: null,
     }),
 
@@ -1288,15 +1533,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
 
   deleteLeaderLines: (leaderLineIds) =>
-    set((state) => ({
-      ...pushHistory(state),
-      leaderLines: state.leaderLines.filter((l) => !leaderLineIds.includes(l.instanceId)),
-      selectedLeaderLineIds: state.selectedLeaderLineIds.filter((id) => !leaderLineIds.includes(id)),
-      selectedLeaderLinePoint:
-        state.selectedLeaderLinePoint && leaderLineIds.includes(state.selectedLeaderLinePoint.leaderLineId)
-          ? null
-          : state.selectedLeaderLinePoint,
-    })),
+    set((state) => {
+      const groups = stripDeletedGroupMembers(state.groups, { leaderLine: new Set(leaderLineIds) })
+      return {
+        ...pushHistory(state),
+        leaderLines: state.leaderLines.filter((l) => !leaderLineIds.includes(l.instanceId)),
+        selectedLeaderLineIds: state.selectedLeaderLineIds.filter((id) => !leaderLineIds.includes(id)),
+        selectedLeaderLinePoint:
+          state.selectedLeaderLinePoint && leaderLineIds.includes(state.selectedLeaderLinePoint.leaderLineId)
+            ? null
+            : state.selectedLeaderLinePoint,
+        groups,
+        selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
+      }
+    }),
 
   // Continuous drag, like moveShape/moveInstance — checkpointed once at
   // drag-start via onDragCheckpoint, not on every pointermove.
@@ -1324,10 +1574,183 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedWaypoint: null,
       selectedLayerId: leaderLineIds.length > 0 ? null : get().selectedLayerId,
       selectedLeaderLinePoint: null,
+      selectedGroupId: null,
       tagRenameError: null,
     }),
 
   selectLeaderLinePoint: (selection) => set({ selectedLeaderLinePoint: selection }),
+
+  selectMixed: (selection) =>
+    set({
+      selectedInstanceIds: selection.instanceIds,
+      selectedPipeIds: selection.pipeIds,
+      selectedShapeIds: selection.shapeIds,
+      selectedLeaderLineIds: selection.leaderLineIds,
+      selectedRole: null,
+      selectedWaypoint: null,
+      selectedLeaderLinePoint: null,
+      selectedLayerId: null,
+      selectedGroupId: null,
+      tagRenameError: null,
+    }),
+
+  selectGroup: (groupId) =>
+    set((state) => {
+      const group = state.groups.find((g) => g.groupId === groupId)
+      if (!group) return {}
+      const byKind = (kind: GroupMemberRef['kind']) => group.members.filter((m) => m.kind === kind).map((m) => m.id)
+      return {
+        selectedInstanceIds: byKind('instance'),
+        selectedPipeIds: byKind('pipe'),
+        selectedShapeIds: byKind('shape'),
+        selectedLeaderLineIds: byKind('leaderLine'),
+        selectedGroupId: groupId,
+        selectedRole: null,
+        selectedWaypoint: null,
+        selectedLeaderLinePoint: null,
+        selectedLayerId: null,
+        tagRenameError: null,
+      }
+    }),
+
+  createGroup: () =>
+    set((state) => {
+      const total =
+        state.selectedInstanceIds.length +
+        state.selectedPipeIds.length +
+        state.selectedShapeIds.length +
+        state.selectedLeaderLineIds.length
+      if (total < 2) return {}
+
+      const selectedIds: Record<GroupMemberRef['kind'], Set<string>> = {
+        instance: new Set(state.selectedInstanceIds),
+        pipe: new Set(state.selectedPipeIds),
+        shape: new Set(state.selectedShapeIds),
+        leaderLine: new Set(state.selectedLeaderLineIds),
+      }
+      // No real nested groups in v1: grouping a selection that already
+      // covers an existing whole group merges/flattens that group into the
+      // new one instead of nesting — any existing group whose every member
+      // is part of the current selection is absorbed (its record dropped;
+      // its members are already included via the selection below).
+      const absorbedGroupIds = new Set(
+        state.groups.filter((g) => g.members.every((m) => selectedIds[m.kind].has(m.id))).map((g) => g.groupId),
+      )
+      const members: GroupMemberRef[] = [
+        ...state.selectedInstanceIds.map((id) => ({ kind: 'instance' as const, id })),
+        ...state.selectedPipeIds.map((id) => ({ kind: 'pipe' as const, id })),
+        ...state.selectedShapeIds.map((id) => ({ kind: 'shape' as const, id })),
+        ...state.selectedLeaderLineIds.map((id) => ({ kind: 'leaderLine' as const, id })),
+      ]
+      const group: Group = { groupId: crypto.randomUUID(), members }
+      return {
+        ...pushHistory(state),
+        groups: [...state.groups.filter((g) => !absorbedGroupIds.has(g.groupId)), group],
+        selectedGroupId: group.groupId,
+      }
+    }),
+
+  ungroup: (groupId) =>
+    set((state) => ({
+      ...pushHistory(state),
+      groups: state.groups.filter((g) => g.groupId !== groupId),
+      // The four selection arrays are left exactly as they are — ungrouping
+      // demotes a group to a loose multi-select, it doesn't clear it.
+      selectedGroupId: null,
+    })),
+
+  deleteGroup: (groupId) =>
+    set((state) => {
+      const group = state.groups.find((g) => g.groupId === groupId)
+      if (!group) return {}
+      const instanceIds = new Set(group.members.filter((m) => m.kind === 'instance').map((m) => m.id))
+      const pipeIds = new Set(group.members.filter((m) => m.kind === 'pipe').map((m) => m.id))
+      const shapeIds = new Set(group.members.filter((m) => m.kind === 'shape').map((m) => m.id))
+      const leaderLineIds = new Set(group.members.filter((m) => m.kind === 'leaderLine').map((m) => m.id))
+      // Inlined via computeMixedDeletion rather than calling deleteInstances/
+      // deletePipes/etc. — each of those pushes its own history entry, which
+      // would turn one "delete group" into several undo steps instead of the
+      // required single one. No separate step to drop the group's own
+      // record: it ends up with 0 members (all deleted here), and
+      // stripDeletedGroupMembers already drops any group under 2 members.
+      return {
+        ...pushHistory(state),
+        ...computeMixedDeletion(state, { instanceIds, pipeIds, shapeIds, leaderLineIds }),
+        selectedGroupId: null,
+        selectedInstanceIds: [],
+        selectedPipeIds: [],
+        selectedShapeIds: [],
+        selectedLeaderLineIds: [],
+        selectedRole: null,
+        selectedWaypoint: null,
+        selectedLeaderLinePoint: null,
+        tagRenameError: null,
+      }
+    }),
+
+  /**
+   * v1's shared group edit is style-only (fill/stroke/text color) — see
+   * applyStyleFieldToIds for which member kinds support which field. One
+   * `pushHistory` call regardless of how many members change, so a
+   * group-wide color edit is a single undo step.
+   */
+  setGroupStyle: (groupId, field, value) =>
+    set((state) => {
+      const group = state.groups.find((g) => g.groupId === groupId)
+      if (!group) return {}
+      const instanceIds = new Set(group.members.filter((m) => m.kind === 'instance').map((m) => m.id))
+      const pipeIds = new Set(group.members.filter((m) => m.kind === 'pipe').map((m) => m.id))
+      const shapeIds = new Set(group.members.filter((m) => m.kind === 'shape').map((m) => m.id))
+      return { ...pushHistory(state), ...applyStyleFieldToIds(state, { instanceIds, pipeIds, shapeIds }, field, value) }
+    }),
+
+  /**
+   * Same style broadcast as setGroupStyle, but for a loose (ungrouped)
+   * multi-selection — reads ids straight from the current selection arrays
+   * instead of a persisted Group's members. Lets the properties panel offer
+   * the same shared-style editing for "2+ things selected" regardless of
+   * whether they've been formally grouped yet.
+   */
+  setSelectionStyle: (field, value) =>
+    set((state) => ({
+      ...pushHistory(state),
+      ...applyStyleFieldToIds(
+        state,
+        {
+          instanceIds: new Set(state.selectedInstanceIds),
+          pipeIds: new Set(state.selectedPipeIds),
+          shapeIds: new Set(state.selectedShapeIds),
+        },
+        field,
+        value,
+      ),
+    })),
+
+  /**
+   * Deletes everything currently selected across all four categories at
+   * once, one undo step — the loose-multi-select counterpart to deleteGroup.
+   */
+  deleteSelection: () =>
+    set((state) => {
+      const instanceIds = new Set(state.selectedInstanceIds)
+      const pipeIds = new Set(state.selectedPipeIds)
+      const shapeIds = new Set(state.selectedShapeIds)
+      const leaderLineIds = new Set(state.selectedLeaderLineIds)
+      const deletion = computeMixedDeletion(state, { instanceIds, pipeIds, shapeIds, leaderLineIds })
+      return {
+        ...pushHistory(state),
+        ...deletion,
+        selectedGroupId: clearSelectedGroupIfGone(deletion.groups, state.selectedGroupId),
+        selectedInstanceIds: [],
+        selectedPipeIds: [],
+        selectedShapeIds: [],
+        selectedLeaderLineIds: [],
+        selectedRole: null,
+        selectedWaypoint: null,
+        selectedLeaderLinePoint: null,
+        tagRenameError: null,
+      }
+    }),
 
   addImageLayer: (name, src, width, height) =>
     set((state) => {
@@ -1352,6 +1775,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return { ...pushHistory(state), layers: [...state.layers, layer] }
     }),
 
+  // Note: doesn't cascade-delete instances/shapes whose layerId pointed at
+  // this layer (that's pre-existing behavior, unrelated to grouping) — since
+  // no instance/pipe/shape/leaderLine record is actually removed here, there
+  // is nothing for a Group to end up dangling on, unlike the delete* actions
+  // above.
   deleteLayer: (layerId) =>
     set((state) => ({
       ...pushHistory(state),
@@ -1426,6 +1854,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedShapeIds: layerId ? [] : get().selectedShapeIds,
       selectedLeaderLineIds: layerId ? [] : get().selectedLeaderLineIds,
       selectedLeaderLinePoint: layerId ? null : get().selectedLeaderLinePoint,
+      selectedGroupId: layerId ? null : get().selectedGroupId,
       selectedRole: null,
       selectedWaypoint: null,
       tagRenameError: null,
@@ -1440,6 +1869,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedShapeIds: [],
       selectedLeaderLineIds: [],
       selectedLeaderLinePoint: null,
+      selectedGroupId: null,
       selectedRole: null,
       selectedWaypoint: null,
       tagRenameError: null,
@@ -1527,6 +1957,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         state.gridSize,
         state.projectMeta?.createdAt,
         state.leaderLines,
+        state.groups,
       )
       await api.saveProject(state.projectName, snapshot)
       const projects = await api.listProjects()
@@ -1568,6 +1999,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         freeShapes: project.freeShapes ?? [],
         leaderLines: project.leaderLines ?? [],
         layers: project.layers && project.layers.length > 0 ? project.layers : [DEFAULT_VECTOR_LAYER],
+        // Older saved projects won't have this field at all either.
+        groups: project.groups ?? [],
         selectedInstanceIds: [],
         selectedPipeIds: [],
         selectedRole: null,
@@ -1575,6 +2008,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedShapeIds: [],
         selectedLeaderLineIds: [],
         selectedLeaderLinePoint: null,
+        selectedGroupId: null,
         tagRenameError: null,
         // Undo history from whatever project was open before doesn't apply
         // to a freshly loaded one.
@@ -1670,6 +2104,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       state.gridSize,
       state.projectMeta?.createdAt,
       state.leaderLines,
+      state.groups,
     )
     downloadTextFile(`${state.projectName}.gvproj.json`, JSON.stringify(snapshot, null, 2), 'application/json')
   },
@@ -1687,6 +2122,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       freeShapes: project.freeShapes ?? [],
       leaderLines: project.leaderLines ?? [],
       layers: project.layers && project.layers.length > 0 ? project.layers : [DEFAULT_VECTOR_LAYER],
+      groups: project.groups ?? [],
       selectedInstanceIds: [],
       selectedPipeIds: [],
       selectedRole: null,
@@ -1694,6 +2130,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedShapeIds: [],
       selectedLeaderLineIds: [],
       selectedLeaderLinePoint: null,
+      selectedGroupId: null,
       tagRenameError: null,
       past: [],
       future: [],
@@ -1784,7 +2221,8 @@ useProjectStore.subscribe((state, prevState) => {
     state.pipes !== prevState.pipes ||
     state.freeShapes !== prevState.freeShapes ||
     state.leaderLines !== prevState.leaderLines ||
-    state.layers !== prevState.layers
+    state.layers !== prevState.layers ||
+    state.groups !== prevState.groups
   if (!changed) return
   if (suppressNextAutosaveDirty) {
     suppressNextAutosaveDirty = false
@@ -1842,6 +2280,7 @@ function buildProjectSnapshot(
   /** Carried through from the previously known meta so autosaving repeatedly doesn't keep resetting it to "now" — a brand new/never-saved project has none yet, so it's stamped once here. */
   createdAt?: string,
   leaderLines: LeaderLine[] = [],
+  groups: Group[] = [],
 ): Project {
   const now = new Date().toISOString()
   return {
@@ -1861,5 +2300,6 @@ function buildProjectSnapshot(
     pipes,
     leaderLines,
     freeShapes,
+    groups,
   }
 }

@@ -147,4 +147,5 @@ export const EXAMPLE_GAS_SYSTEM_PROJECT: Project = {
   ],
   leaderLines: [],
   freeShapes: [],
+  groups: [],
 }

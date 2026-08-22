@@ -3,6 +3,9 @@ import type {
   FreePoint,
   FreeShape,
   FreeShapeKind,
+  Group,
+  GroupMemberKind,
+  GroupMemberRef,
   ImageLayer,
   Layer,
   LeaderLine,
@@ -96,6 +99,22 @@ export interface SvgCanvasCallbacks {
    */
   onDragCheckpoint: () => void
   onSelectionChanged: (instanceIds: string[]) => void
+  /**
+   * A box-select that catches a mix of instances/pipes/shapes/leader lines
+   * together — sets all four selection-category arrays at once (see the
+   * store's selectMixed) instead of going through onSelectionChanged/
+   * onPipeSelectionChanged/etc. individually, each of which clears the
+   * OTHER three categories (correct for their own single-category click use
+   * case, wrong here — it would just make whichever call runs last win).
+   */
+  onMixedSelectionChanged: (selection: {
+    instanceIds: string[]
+    pipeIds: string[]
+    shapeIds: string[]
+    leaderLineIds: string[]
+  }) => void
+  /** Clicking (or box-selecting into) any member of a persisted Group selects the whole group as a unit — see the grouping plan's PowerPoint-style click behavior. */
+  onGroupSelected: (groupId: string) => void
   onRoleSelected: (selection: RoleSelection | null) => void
   /** pipePoints are free pipe knots caught in the same box-select as the instances — see companionPipePoints. */
   onGroupDragStart: (instanceIds: string[], pipePoints: { pipeId: string; point: 'from' | 'to' | number }[]) => void
@@ -266,6 +285,9 @@ export class SvgCanvas {
   private latestShapes: FreeShape[] = []
   private latestLeaderLines: LeaderLine[] = []
   private latestLayers: Layer[] = []
+  private latestGroups: Group[] = []
+  /** Set on double-click of a member of the currently selected group; while entered, clicking a member of THIS group bypasses the group-redirect and selects that one member instead (PowerPoint-style "enter the group"). Cleared on empty-canvas click or Escape (see App.tsx). */
+  private enteredGroupId: string | null = null
 
   /** fromPort is a bare FreePoint when the draw started on empty canvas ("start a pipe out in the blue") rather than a real port. */
   private pipeDraft: { fromPort: PortRef | FreePoint; fromPos: Point; waypoints: Point[] } | null = null
@@ -1030,6 +1052,25 @@ export class SvgCanvas {
     // anything. elementFromPoint bypasses that retargeting entirely.
     const target = document.elementFromPoint(evt.clientX, evt.clientY) as Element | null
     if (!target) return
+
+    // Double-click on a member of the CURRENTLY selected group enters it:
+    // selects just that one member instead of the whole group, and remembers
+    // enteredGroupId so the very next plain click on this same group's
+    // members bypasses the group-redirect in onPointerDown (see
+    // groupRedirectFor) — there's no separate "exit" step, since
+    // groupRedirectFor itself clears enteredGroupId the moment a click lands
+    // on a different group or an ungrouped element.
+    if (!target.closest('[data-waypoint-index]')) {
+      const memberHit = this.resolveGroupMemberAt(target)
+      const group = memberHit && this.groupContaining(memberHit.kind, memberHit.id)
+      if (memberHit && group && this.isCurrentGroupSelection(group)) {
+        evt.preventDefault()
+        this.enteredGroupId = group.groupId
+        this.selectSingleGroupMember(memberHit.kind, memberHit.id)
+        return
+      }
+    }
+
     if (target.closest('[data-waypoint-index]')) return
     const pipeEl = target.closest('[data-pipe-id]') as SVGElement | null
     if (!pipeEl) return
@@ -1289,6 +1330,33 @@ export class SvgCanvas {
 
     if (roleEl && instanceEl) {
       const instanceId = instanceEl.getAttribute('data-instance-id')!
+
+      if (isMultiSelectModifier(evt)) {
+        // Ctrl/Cmd+click on a role-covered click just toggles the instance,
+        // same as a plain instanceEl Ctrl/Cmd+click — no point starting a
+        // role-drag under a multi-select gesture.
+        this.toggleMemberInSelection('instance', instanceId)
+        return
+      }
+
+      // Same group-redirect as the plain instanceEl branch below: a click
+      // that happens to land on a role element (most commonly the Indicator
+      // overlay, which visually IS the component body for many types, per
+      // CLAUDE.md's "colored overlay on top of an untagged base outline
+      // group with an identical transform") must still select the whole
+      // group first — otherwise grouping felt inconsistent across component
+      // types purely because of which of their parts a click happened to
+      // land on (e.g. valves vs. gas bottles vs. pipes).
+      const redirectGroup = this.groupRedirectFor('instance', instanceId)
+      if (redirectGroup) {
+        this.callbacks.onGroupSelected(redirectGroup.groupId)
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        const memberInstanceIds = redirectGroup.members.filter((m) => m.kind === 'instance').map((m) => m.id)
+        this.callbacks.onGroupDragStart(memberInstanceIds, [])
+        return
+      }
+
       const role = roleEl.getAttribute('data-role') as Suffix
       this.setSelectionFromUser([instanceId])
       this.setRoleSelectionFromUser({ instanceId, role })
@@ -1314,10 +1382,23 @@ export class SvgCanvas {
       if (isMultiSelectModifier(evt)) {
         // Ctrl/Cmd+click: toggle membership only, never starts a drag (matches
         // the usual "click to add/remove, drag separately to move" convention).
-        const next = this.selectedInstanceIds.includes(instanceId)
-          ? this.selectedInstanceIds.filter((id) => id !== instanceId)
-          : [...this.selectedInstanceIds, instanceId]
-        this.setSelectionFromUser(next)
+        this.toggleMemberInSelection('instance', instanceId)
+        return
+      }
+
+      // Clicking a member of a persisted Group (that we're not already
+      // "entered" into, see enteredGroupId) selects the whole group and
+      // starts a group-drag of it instead of this one instance —
+      // PowerPoint-style. Takes priority over the loose-multi-select
+      // "partOfGroup" check just below, which is a different, older concept
+      // (a transient multi-select, not a persisted Group).
+      const redirectGroup = this.groupRedirectFor('instance', instanceId)
+      if (redirectGroup) {
+        this.callbacks.onGroupSelected(redirectGroup.groupId)
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        const memberInstanceIds = redirectGroup.members.filter((m) => m.kind === 'instance').map((m) => m.id)
+        this.callbacks.onGroupDragStart(memberInstanceIds, [])
         return
       }
 
@@ -1354,12 +1435,35 @@ export class SvgCanvas {
     }
 
     if (pipeEl) {
-      this.setPipeSelectionFromUser([pipeEl.getAttribute('data-pipe-id')!])
+      const pipeId = pipeEl.getAttribute('data-pipe-id')!
+      if (isMultiSelectModifier(evt)) {
+        this.toggleMemberInSelection('pipe', pipeId)
+        return
+      }
+      const redirectGroup = this.groupRedirectFor('pipe', pipeId)
+      if (redirectGroup) {
+        this.callbacks.onGroupSelected(redirectGroup.groupId)
+        return
+      }
+      this.setPipeSelectionFromUser([pipeId])
       return
     }
 
     if (shapeEl) {
       const shapeId = shapeEl.getAttribute('data-shape-id')!
+      if (isMultiSelectModifier(evt)) {
+        this.toggleMemberInSelection('shape', shapeId)
+        return
+      }
+      const redirectGroup = this.groupRedirectFor('shape', shapeId)
+      if (redirectGroup) {
+        this.callbacks.onGroupSelected(redirectGroup.groupId)
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        const memberInstanceIds = redirectGroup.members.filter((m) => m.kind === 'instance').map((m) => m.id)
+        this.callbacks.onGroupDragStart(memberInstanceIds, [])
+        return
+      }
       this.setShapeSelectionFromUser([shapeId])
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-shape'
@@ -1371,10 +1475,20 @@ export class SvgCanvas {
     }
 
     if (leaderLineEl) {
+      const leaderLineId = leaderLineEl.getAttribute('data-leader-line-id')!
+      if (isMultiSelectModifier(evt)) {
+        this.toggleMemberInSelection('leaderLine', leaderLineId)
+        return
+      }
+      const redirectGroup = this.groupRedirectFor('leaderLine', leaderLineId)
+      if (redirectGroup) {
+        this.callbacks.onGroupSelected(redirectGroup.groupId)
+        return
+      }
       // Selecting the line body itself doesn't start a drag — only the
       // `to`/waypoint handles do (see leaderLinePointEl above); `from` isn't
       // draggable in v1.
-      this.setLeaderLineSelectionFromUser([leaderLineEl.getAttribute('data-leader-line-id')!])
+      this.setLeaderLineSelectionFromUser([leaderLineId])
       return
     }
 
@@ -1384,6 +1498,7 @@ export class SvgCanvas {
     if (layerEl) {
       const layerId = layerEl.getAttribute('data-layer-id')!
       const layer = this.latestLayers.find((l) => l.layerId === layerId)
+      this.enteredGroupId = null
       this.setLayerSelectionFromUser(layerId)
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-layer'
@@ -1400,6 +1515,10 @@ export class SvgCanvas {
       return
     }
 
+    // Empty canvas: starts a box-select and exits any "entered" group (see
+    // enteredGroupId) — clicking away from a group's members always leaves
+    // whole-group-selection mode for the next click on them.
+    this.enteredGroupId = null
     this.dragMode = 'box-select'
     this.boxSelectAdditive = isMultiSelectModifier(evt)
     this.boxSelectStartWorld = world
@@ -1746,11 +1865,13 @@ export class SvgCanvas {
   }
 
   /**
-   * Instances take priority (and are the only category additive/Ctrl+drag
-   * applies to, same as before) — but a box that catches no instance now
-   * also tries pipes, then leader lines, matching on any of their points
-   * (endpoints/waypoints/"knots") falling inside the box, so either can be
-   * multi-selected by dragging over them instead of one at a time.
+   * Computes matches for all four categories (instances/pipes/shapes/leader
+   * lines) unconditionally in one pass and unions them into the selection —
+   * the previous version checked instances first and only looked at pipes
+   * (then leader lines) as a fallback when zero instances matched, so a box
+   * overlapping both a component and a pipe silently dropped the pipe. That
+   * tiering was a real pre-existing bug affecting every box-select, not
+   * just this grouping feature; fixed here for all of them at once.
    */
   private finalizeBoxSelect(endWorld: Point) {
     const minX = Math.min(this.boxSelectStartWorld.x, endWorld.x)
@@ -1760,56 +1881,13 @@ export class SvgCanvas {
     const within = (p: Point) => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY
 
     const matchedInstances = this.latestInstances.filter((inst) => within(inst.transform)).map((i) => i.instanceId)
-
-    if (matchedInstances.length > 0 || this.boxSelectAdditive) {
-      const nextSelection = this.boxSelectAdditive
-        ? Array.from(new Set([...this.selectedInstanceIds, ...matchedInstances]))
-        : matchedInstances
-      this.setSelectionFromUser(nextSelection)
-      if (!this.boxSelectAdditive) {
-        this.setPipeSelectionFromUser([])
-        this.setLeaderLineSelectionFromUser([])
-      }
-      // "Mark knots like elements": a free pipe knot (interior waypoint, or
-      // a disconnected from/to end — an *attached* end already tracks its
-      // component live and needs no help) caught in the same box as an
-      // instance travels with it on the very next drag. setSelectionFromUser
-      // (just above) clears this field first, so it's safe to set it after.
-      if (matchedInstances.length > 0) {
-        for (const pipe of this.latestPipes) {
-          const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
-          if (!points) continue
-          points.forEach((pos, idx) => {
-            if (!within(pos)) return
-            if (idx === 0) {
-              if (!isPortRef(pipe.fromPort)) this.companionPipePoints.push({ pipeId: pipe.instanceId, point: 'from' })
-            } else if (idx === points.length - 1) {
-              if (!isPortRef(pipe.toPort)) this.companionPipePoints.push({ pipeId: pipe.instanceId, point: 'to' })
-            } else {
-              this.companionPipePoints.push({ pipeId: pipe.instanceId, point: idx - 1 })
-            }
-          })
-        }
-      }
-      this.refreshCompanionPipePointHandles()
-      if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
-      return
-    }
-
     const matchedPipes = this.latestPipes
       .filter((pipe) => {
         const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
         return points?.some(within) ?? false
       })
       .map((p) => p.instanceId)
-
-    if (matchedPipes.length > 0) {
-      this.setPipeSelectionFromUser(matchedPipes)
-      this.setLeaderLineSelectionFromUser([])
-      if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
-      return
-    }
-
+    const matchedShapes = this.latestShapes.filter((shape) => shape.points.some(within)).map((s) => s.instanceId)
     const matchedLeaderLines = this.latestLeaderLines
       .filter((line) => {
         const points = getLeaderLinePoints(line, this.latestInstances)
@@ -1817,15 +1895,91 @@ export class SvgCanvas {
       })
       .map((l) => l.instanceId)
 
-    if (matchedLeaderLines.length > 0) {
-      this.setLeaderLineSelectionFromUser(matchedLeaderLines)
-      this.setPipeSelectionFromUser([])
-    } else {
+    const nothingMatched =
+      matchedInstances.length === 0 &&
+      matchedPipes.length === 0 &&
+      matchedShapes.length === 0 &&
+      matchedLeaderLines.length === 0
+
+    if (nothingMatched && !this.boxSelectAdditive) {
       // Nothing in the box at all — clears every selection category, same as before.
-      this.setSelectionFromUser([])
-      this.setPipeSelectionFromUser([])
-      this.setLeaderLineSelectionFromUser([])
+      this.setMixedSelectionFromUser({ instanceIds: [], pipeIds: [], shapeIds: [], leaderLineIds: [] })
+      if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
+      return
     }
+
+    // Group expansion: a (non-additive) box that touches members of exactly
+    // one existing group selects that group as a whole (its full
+    // membership, not just whichever of its members happened to fall inside
+    // the box); touching members of more than one group at once falls back
+    // to a loose multi-select across just the raw matches below instead of
+    // trying to merge two groups' memberships together — an explicit v1
+    // simplification (see the grouping plan), not an oversight.
+    if (!this.boxSelectAdditive) {
+      const touchedGroupIds = new Set(
+        this.latestGroups
+          .filter((g) =>
+            g.members.some(
+              (m) =>
+                (m.kind === 'instance' && matchedInstances.includes(m.id)) ||
+                (m.kind === 'pipe' && matchedPipes.includes(m.id)) ||
+                (m.kind === 'shape' && matchedShapes.includes(m.id)) ||
+                (m.kind === 'leaderLine' && matchedLeaderLines.includes(m.id)),
+            ),
+          )
+          .map((g) => g.groupId),
+      )
+      if (touchedGroupIds.size === 1) {
+        this.companionPipePoints = []
+        this.refreshCompanionPipePointHandles()
+        this.callbacks.onGroupSelected([...touchedGroupIds][0])
+        if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
+        return
+      }
+    }
+
+    const nextInstances = this.boxSelectAdditive
+      ? Array.from(new Set([...this.selectedInstanceIds, ...matchedInstances]))
+      : matchedInstances
+    const nextPipes = this.boxSelectAdditive
+      ? Array.from(new Set([...this.selectedPipeIds, ...matchedPipes]))
+      : matchedPipes
+    const nextShapes = this.boxSelectAdditive
+      ? Array.from(new Set([...this.selectedShapeIds, ...matchedShapes]))
+      : matchedShapes
+    const nextLeaderLines = this.boxSelectAdditive
+      ? Array.from(new Set([...this.selectedLeaderLineIds, ...matchedLeaderLines]))
+      : matchedLeaderLines
+
+    this.setMixedSelectionFromUser({
+      instanceIds: nextInstances,
+      pipeIds: nextPipes,
+      shapeIds: nextShapes,
+      leaderLineIds: nextLeaderLines,
+    })
+
+    // "Mark knots like elements": a free pipe knot (interior waypoint, or a
+    // disconnected from/to end — an *attached* end already tracks its
+    // component live and needs no help) caught in the same box as an
+    // instance travels with it on the very next drag. setMixedSelectionFromUser
+    // (just above) clears this field first, so it's safe to set it after.
+    if (matchedInstances.length > 0) {
+      for (const pipe of this.latestPipes) {
+        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+        if (!points) continue
+        points.forEach((pos, idx) => {
+          if (!within(pos)) return
+          if (idx === 0) {
+            if (!isPortRef(pipe.fromPort)) this.companionPipePoints.push({ pipeId: pipe.instanceId, point: 'from' })
+          } else if (idx === points.length - 1) {
+            if (!isPortRef(pipe.toPort)) this.companionPipePoints.push({ pipeId: pipe.instanceId, point: 'to' })
+          } else {
+            this.companionPipePoints.push({ pipeId: pipe.instanceId, point: idx - 1 })
+          }
+        })
+      }
+    }
+    this.refreshCompanionPipePointHandles()
     if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
   }
 
@@ -1836,6 +1990,152 @@ export class SvgCanvas {
    * has some, so they only ever survive into the very next drag they were
    * computed for, never a later, unrelated one.
    */
+  /**
+   * Sets all four selection-category highlight/state at once and notifies
+   * onMixedSelectionChanged — used by finalizeBoxSelect's unified match pass
+   * so a box catching a genuine mix (e.g. a component and a pipe together)
+   * keeps all of them selected together, instead of going through the four
+   * individual setXSelectionFromUser methods, each of which (via its own
+   * store action) clears the OTHER three categories for its own single-
+   * category click use case.
+   */
+  /**
+   * Ctrl/Cmd+click toggle-membership, generalized to any of the four kinds
+   * and routed through setMixedSelectionFromUser instead of a single-kind
+   * setXSelectionFromUser — so Ctrl/Cmd+clicking across different kinds
+   * (an instance, then a pipe, then a shape) accumulates a real mixed
+   * selection instead of each click's own store action wiping the other
+   * three categories.
+   *
+   * Respects group boundaries: if the clicked element belongs to a
+   * persisted Group, the WHOLE group toggles as one unit (added if any of
+   * its members are missing from the current selection, removed only if
+   * every one of them is already present) — so Ctrl/Cmd+clicking a member
+   * of a different group while one group is already selected adds that
+   * entire second group, not just the one element clicked. An ungrouped
+   * element still toggles on its own, same as before.
+   */
+  private toggleMemberInSelection(kind: GroupMemberKind, id: string) {
+    this.enteredGroupId = null
+    const group = this.groupContaining(kind, id)
+    const targets: GroupMemberRef[] = group ? group.members : [{ kind, id }]
+
+    const sets: Record<GroupMemberKind, Set<string>> = {
+      instance: new Set(this.selectedInstanceIds),
+      pipe: new Set(this.selectedPipeIds),
+      shape: new Set(this.selectedShapeIds),
+      leaderLine: new Set(this.selectedLeaderLineIds),
+    }
+    const allPresent = targets.every((m) => sets[m.kind].has(m.id))
+    for (const m of targets) {
+      if (allPresent) sets[m.kind].delete(m.id)
+      else sets[m.kind].add(m.id)
+    }
+    const next = {
+      instanceIds: Array.from(sets.instance),
+      pipeIds: Array.from(sets.pipe),
+      shapeIds: Array.from(sets.shape),
+      leaderLineIds: Array.from(sets.leaderLine),
+    }
+
+    // If the resulting selection happens to exactly equal some persisted
+    // group's full membership (e.g. Ctrl/Cmd+clicking a second group off
+    // again leaves exactly the first one), reselect it as that group so the
+    // properties panel shows "Group selected" rather than a generic loose
+    // multi-select.
+    const exactGroup = this.latestGroups.find((g) => this.membersMatchSelection(g, next))
+    if (exactGroup) {
+      this.callbacks.onGroupSelected(exactGroup.groupId)
+      return
+    }
+    this.setMixedSelectionFromUser(next)
+  }
+
+  /** True when `group`'s full membership exactly equals the given four-array selection — shared by isCurrentGroupSelection (against the live canvas selection) and toggleMemberInSelection (against a not-yet-applied candidate selection). */
+  private membersMatchSelection(
+    group: Group,
+    selection: { instanceIds: string[]; pipeIds: string[]; shapeIds: string[]; leaderLineIds: string[] },
+  ): boolean {
+    const total =
+      selection.instanceIds.length + selection.pipeIds.length + selection.shapeIds.length + selection.leaderLineIds.length
+    if (group.members.length !== total) return false
+    const sets: Record<GroupMemberKind, Set<string>> = {
+      instance: new Set(selection.instanceIds),
+      pipe: new Set(selection.pipeIds),
+      shape: new Set(selection.shapeIds),
+      leaderLine: new Set(selection.leaderLineIds),
+    }
+    return group.members.every((m) => sets[m.kind].has(m.id))
+  }
+
+  private setMixedSelectionFromUser(selection: {
+    instanceIds: string[]
+    pipeIds: string[]
+    shapeIds: string[]
+    leaderLineIds: string[]
+  }) {
+    this.setRoleSelectionFromUser(null)
+    this.applySelectionHighlight(selection.instanceIds)
+    this.applyPipeSelectionHighlight(selection.pipeIds)
+    this.applyShapeSelectionHighlight(selection.shapeIds)
+    this.applyLeaderLineSelectionHighlight(selection.leaderLineIds)
+    this.companionPipePoints = []
+    this.refreshCompanionPipePointHandles()
+    this.callbacks.onMixedSelectionChanged(selection)
+  }
+
+  /** Finds the group (if any) a given member kind/id belongs to — flat lookup, no recursion (Group.members is always leaf-kind, see the model). */
+  private groupContaining(kind: GroupMemberKind, id: string): Group | null {
+    return this.latestGroups.find((g) => g.members.some((m) => m.kind === kind && m.id === id)) ?? null
+  }
+
+  /** True when `group`'s full membership exactly equals the canvas's current live selection — used to recognize "the currently selected group" without SvgCanvas needing its own copy of selectedGroupId. */
+  private isCurrentGroupSelection(group: Group): boolean {
+    return this.membersMatchSelection(group, {
+      instanceIds: this.selectedInstanceIds,
+      pipeIds: this.selectedPipeIds,
+      shapeIds: this.selectedShapeIds,
+      leaderLineIds: this.selectedLeaderLineIds,
+    })
+  }
+
+  /**
+   * Decides whether a plain click on this member should redirect into
+   * whole-group selection (PowerPoint-style), and maintains enteredGroupId
+   * along the way: exits it the moment a different group (or an ungrouped
+   * element) is clicked, so a stale "entered" flag can never linger onto an
+   * unrelated later click. Returns the group to redirect to, or null if
+   * there's no group here or we're already entered into this exact one (see
+   * onDoubleClick, which is the only place that sets enteredGroupId).
+   */
+  private groupRedirectFor(kind: GroupMemberKind, id: string): Group | null {
+    const group = this.groupContaining(kind, id)
+    const staysEntered = group != null && this.enteredGroupId === group.groupId
+    if (!staysEntered) this.enteredGroupId = null
+    return staysEntered ? null : group
+  }
+
+  /** Selects just one member on its own — used when double-clicking into a group (see onDoubleClick) to bypass the group-redirect for that one click. */
+  private selectSingleGroupMember(kind: GroupMemberKind, id: string) {
+    if (kind === 'instance') this.setSelectionFromUser([id])
+    else if (kind === 'pipe') this.setPipeSelectionFromUser([id])
+    else if (kind === 'shape') this.setShapeSelectionFromUser([id])
+    else this.setLeaderLineSelectionFromUser([id])
+  }
+
+  /** Resolves the nearest group-member-bearing element (instance/pipe/shape/leader-line) at a point, if any — used by onDoubleClick's group-enter check. */
+  private resolveGroupMemberAt(target: Element): { kind: GroupMemberKind; id: string } | null {
+    const instanceEl = target.closest('[data-instance-id]') as SVGElement | null
+    if (instanceEl) return { kind: 'instance', id: instanceEl.getAttribute('data-instance-id')! }
+    const shapeEl = target.closest('[data-shape-id]') as SVGElement | null
+    if (shapeEl) return { kind: 'shape', id: shapeEl.getAttribute('data-shape-id')! }
+    const pipeEl = target.closest('[data-pipe-id]') as SVGElement | null
+    if (pipeEl) return { kind: 'pipe', id: pipeEl.getAttribute('data-pipe-id')! }
+    const leaderLineEl = target.closest('[data-leader-line-id]') as SVGElement | null
+    if (leaderLineEl) return { kind: 'leaderLine', id: leaderLineEl.getAttribute('data-leader-line-id')! }
+    return null
+  }
+
   private setSelectionFromUser(instanceIds: string[]) {
     // Any general (re-)selection drops a stale role sub-selection; callers
     // that click a role re-apply it right after via setRoleSelectionFromUser.
@@ -1849,6 +2149,11 @@ export class SvgCanvas {
   /** External sync (e.g. selection changed from a properties panel): highlight only, no callback. */
   setSelection(instanceIds: string[]) {
     this.applySelectionHighlight(instanceIds)
+  }
+
+  /** Called from App.tsx's Escape handler — exits "entered" group-editing mode (see enteredGroupId) the same way clicking empty canvas does. */
+  clearEnteredGroup() {
+    this.enteredGroupId = null
   }
 
   private setRoleSelectionFromUser(selection: RoleSelection | null) {
@@ -2470,6 +2775,11 @@ export class SvgCanvas {
     // geometry needs to be recomputed too, not just wait for its own next
     // unrelated instances/pipes change.
     this.syncPipes(this.latestPipes, this.latestInstances)
+  }
+
+  /** Groups have no DOM presence of their own (unlike shapes/leader lines) — just a plain field sync, kept for finalizeBoxSelect's/onPointerDown's group-expansion lookups. */
+  syncGroups(groups: Group[]) {
+    this.latestGroups = groups
   }
 
   /** Reconciles annotation-shape DOM (add/update/remove groups) — purely decorative, no geometry dependency on instances/pipes. */

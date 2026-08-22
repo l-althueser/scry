@@ -1,16 +1,26 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { SvgCanvas } from './SvgCanvas'
 import { useProjectStore } from '../state/projectStore'
 
-export function CanvasView() {
+export interface CanvasViewHandle {
+  /** Forwards to the underlying SvgCanvas's clearEnteredGroup — see App.tsx's Escape handler. */
+  clearEnteredGroup: () => void
+}
+
+export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_props, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<SvgCanvas | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    clearEnteredGroup: () => canvasRef.current?.clearEnteredGroup(),
+  }))
 
   const instances = useProjectStore((s) => s.instances)
   const pipes = useProjectStore((s) => s.pipes)
   const freeShapes = useProjectStore((s) => s.freeShapes)
   const leaderLines = useProjectStore((s) => s.leaderLines)
   const layers = useProjectStore((s) => s.layers)
+  const groups = useProjectStore((s) => s.groups)
   const tool = useProjectStore((s) => s.tool)
   const placingType = useProjectStore((s) => s.placingType)
   const drawingShapeKind = useProjectStore((s) => s.drawingShapeKind)
@@ -52,6 +62,8 @@ export function CanvasView() {
   const moveImageLayer = useProjectStore((s) => s.moveImageLayer)
   const resizeImageLayer = useProjectStore((s) => s.resizeImageLayer)
   const addConnectionPoint = useProjectStore((s) => s.addConnectionPoint)
+  const selectMixed = useProjectStore((s) => s.selectMixed)
+  const selectGroup = useProjectStore((s) => s.selectGroup)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -63,6 +75,8 @@ export function CanvasView() {
       onRoleMoved: (instanceId, role, offset) => moveRole(instanceId, role, offset),
       onDragCheckpoint: () => checkpointHistory(),
       onSelectionChanged: (instanceIds) => selectInstances(instanceIds),
+      onMixedSelectionChanged: (selection) => selectMixed(selection),
+      onGroupSelected: (groupId) => selectGroup(groupId),
       onRoleSelected: (selection) => selectRole(selection),
       onGroupDragStart: (instanceIds, pipePoints) => beginGroupDrag(instanceIds, pipePoints),
       onGroupDragMove: (delta) => applyGroupDrag(delta),
@@ -104,6 +118,10 @@ export function CanvasView() {
   useEffect(() => {
     canvasRef.current?.syncFreeShapes(freeShapes)
   }, [freeShapes])
+
+  useEffect(() => {
+    canvasRef.current?.syncGroups(groups)
+  }, [groups])
 
   useEffect(() => {
     canvasRef.current?.syncLayers(layers)
@@ -152,4 +170,4 @@ export function CanvasView() {
   }, [gridSize])
 
   return <div ref={containerRef} className="canvas-container" />
-}
+})

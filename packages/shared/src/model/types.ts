@@ -234,6 +234,27 @@ export interface LibraryRef {
   version: string
 }
 
+export type GroupMemberKind = 'instance' | 'pipe' | 'shape' | 'leaderLine'
+
+export interface GroupMemberRef {
+  kind: GroupMemberKind
+  id: string
+}
+
+/**
+ * A user-created, persisted grouping of elements across kinds (instances,
+ * pipes, shapes, leader lines). Editor-only concept — has no bearing on the
+ * exported live SVG's Node-RED tag contract. Deliberately flat: a member's
+ * kind is always one of the four leaves above, never 'group' itself, so
+ * nothing that consumes Group.members needs to recurse. Grouping a
+ * selection that includes an existing whole group flattens/merges it into
+ * the new group instead of nesting.
+ */
+export interface Group {
+  groupId: string
+  members: GroupMemberRef[]
+}
+
 export interface Project {
   meta: ProjectMeta
   libraryRefs: LibraryRef[]
@@ -242,6 +263,7 @@ export interface Project {
   pipes: PipeInstance[]
   leaderLines: LeaderLine[]
   freeShapes: FreeShape[]
+  groups: Group[]
 }
 
 // --- Component library ("Baukasten") ---

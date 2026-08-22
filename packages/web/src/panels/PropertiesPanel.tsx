@@ -12,6 +12,7 @@ import {
 import { DEFAULT_FONT_SIZE } from '../shapes/freeShapeGeometry'
 import { loadImageFile } from '../import/loadImageFile'
 import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint } from '../library'
+import { describeComposition, type CompositionCounts } from '../state/selectionDescription'
 
 /** One color field, same single-line layout everywhere it's used: label + swatch + None + Default. `value` null/undefined means "at default". */
 function ColorPickerRow({
@@ -46,6 +47,64 @@ function ColorPickerRow({
   )
 }
 
+/**
+ * Shared body for "a persisted Group is selected" and "2+ things are
+ * selected but not (yet) grouped" — same composition summary, same
+ * shared-style broadcast (only instances/shapes have a fill; instances,
+ * pipes, and shapes all have some notion of stroke/line color; only
+ * instances have a separate text color — see RoleInstance/PipeInstance/
+ * FreeShapeStyle/LeaderLine in types.ts, leader lines have no style fields
+ * at all so they never gate a row in), same action-buttons-plus-hint
+ * layout. Differs only in heading, which action buttons are offered, and
+ * where the style edit is applied (a Group's members vs. the raw
+ * selection) — both wired in by the caller.
+ */
+function SelectionStylePanel({
+  heading,
+  counts,
+  onStyleChange,
+  actions,
+  footerHint,
+}: {
+  heading: string
+  counts: CompositionCounts
+  onStyleChange: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  actions: { label: string; onClick: () => void; danger?: boolean }[]
+  footerHint: string
+}) {
+  const showFill = counts.instances > 0 || counts.shapes > 0
+  const showStroke = counts.instances > 0 || counts.pipes > 0 || counts.shapes > 0
+  const showText = counts.instances > 0
+
+  return (
+    <aside className="properties-panel">
+      <h2>{heading}</h2>
+      <p className="field-hint">{describeComposition(counts)}</p>
+
+      {(showFill || showStroke || showText) && (
+        <fieldset className="field roles-field">
+          <legend>Shared style</legend>
+          <p className="field-hint">Applies to every selected item of a matching kind at once, as a single undo step.</p>
+          {showFill && <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('fill', v)} />}
+          {showStroke && (
+            <ColorPickerRow label="Stroke" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
+          )}
+          {showText && <ColorPickerRow label="Text" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('text', v)} />}
+        </fieldset>
+      )}
+
+      <div className="field-row">
+        {actions.map((a) => (
+          <button key={a.label} className={a.danger ? 'danger' : undefined} onClick={a.onClick}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+      <p className="field-hint">{footerHint}</p>
+    </aside>
+  )
+}
+
 export function PropertiesPanel() {
   const selectedInstanceIds = useProjectStore((s) => s.selectedInstanceIds)
   const instances = useProjectStore((s) => s.instances)
@@ -56,6 +115,14 @@ export function PropertiesPanel() {
   const selectedLeaderLineIds = useProjectStore((s) => s.selectedLeaderLineIds)
   const leaderLines = useProjectStore((s) => s.leaderLines)
   const deleteLeaderLines = useProjectStore((s) => s.deleteLeaderLines)
+  const selectedGroupId = useProjectStore((s) => s.selectedGroupId)
+  const groups = useProjectStore((s) => s.groups)
+  const createGroup = useProjectStore((s) => s.createGroup)
+  const ungroup = useProjectStore((s) => s.ungroup)
+  const deleteGroup = useProjectStore((s) => s.deleteGroup)
+  const setGroupStyle = useProjectStore((s) => s.setGroupStyle)
+  const setSelectionStyle = useProjectStore((s) => s.setSelectionStyle)
+  const deleteSelection = useProjectStore((s) => s.deleteSelection)
   const tagRenameError = useProjectStore((s) => s.tagRenameError)
   const renameInstance = useProjectStore((s) => s.renameInstance)
   const setRoleEnabled = useProjectStore((s) => s.setRoleEnabled)
@@ -65,7 +132,6 @@ export function PropertiesPanel() {
   const setRoleRotation = useProjectStore((s) => s.setRoleRotation)
   const setRoleColor = useProjectStore((s) => s.setRoleColor)
   const deleteInstance = useProjectStore((s) => s.deleteInstance)
-  const deleteInstances = useProjectStore((s) => s.deleteInstances)
   const rotateInstance = useProjectStore((s) => s.rotateInstance)
   const centerRoles = useProjectStore((s) => s.centerRoles)
   const renamePipeTag = useProjectStore((s) => s.renamePipeTag)
@@ -173,19 +239,78 @@ export function PropertiesPanel() {
   const crossings =
     pipe && pipe.routingMode !== 'curved' ? computeCrossingsForPipe(pipe.instanceId, pipes, displayPointsByPipe) : []
 
-  if (selectedPipes.length > 0) {
-    if (!pipe) {
+  // Checked before every other selection-category branch below: a group
+  // selection means the four selection arrays currently equal exactly one
+  // Group's membership (see selectGroup) — takes priority over pipes/
+  // shapes/leaderLines/instances branches, none of which know about groups.
+  // Double-click-to-enter (SvgCanvas) always re-selects just the one entered
+  // member via a single-category select action, which clears selectedGroupId
+  // — so entering a group naturally falls through to the normal
+  // single-instance/pipe/shape/leader-line editors below, unchanged.
+  if (selectedGroupId) {
+    const group = groups.find((g) => g.groupId === selectedGroupId)
+    if (!group) {
       return (
         <aside className="properties-panel">
-          <h2>{selectedPipes.length} pipes selected</h2>
-          <div className="field-row">
-            <button
-              className="danger"
-              onClick={() => deletePipes(selectedPipes.map((p) => p.instanceId))}
-            >
-              Delete all
-            </button>
-          </div>
+          <p className="properties-empty">Select an instance or pipe to edit its properties.</p>
+        </aside>
+      )
+    }
+    const counts: CompositionCounts = {
+      instances: group.members.filter((m) => m.kind === 'instance').length,
+      pipes: group.members.filter((m) => m.kind === 'pipe').length,
+      shapes: group.members.filter((m) => m.kind === 'shape').length,
+      leaderLines: group.members.filter((m) => m.kind === 'leaderLine').length,
+    }
+
+    return (
+      <SelectionStylePanel
+        heading="Group selected"
+        counts={counts}
+        onStyleChange={(field, value) => setGroupStyle(selectedGroupId, field, value)}
+        actions={[
+          { label: 'Ungroup', onClick: () => ungroup(selectedGroupId) },
+          { label: 'Delete group', onClick: () => deleteGroup(selectedGroupId), danger: true },
+        ]}
+        footerHint="Double-click a member to edit it individually. Ctrl/Cmd+Shift+G to ungroup, Escape to deselect."
+      />
+    )
+  }
+
+  // A loose (ungrouped) multi-select spanning 2+ things, of any mix of
+  // kinds — same shared-style/delete/Group-it-up experience as an actual
+  // Group, just not persisted yet. Checked before every per-kind branch
+  // below (pipes/shapes/leaderLines/instances) so none of their single-item
+  // priority ordering swallows a mixed selection into e.g. "1 pipe
+  // selected" while ignoring instances also selected alongside it.
+  const totalSelected = selected.length + selectedPipes.length + selectedShapes.length + selectedLeaderLines.length
+  if (totalSelected > 1) {
+    return (
+      <SelectionStylePanel
+        heading={`${totalSelected} selected`}
+        counts={{
+          instances: selected.length,
+          pipes: selectedPipes.length,
+          shapes: selectedShapes.length,
+          leaderLines: selectedLeaderLines.length,
+        }}
+        onStyleChange={(field, value) => setSelectionStyle(field, value)}
+        actions={[
+          { label: 'Group', onClick: () => createGroup() },
+          { label: 'Delete all', onClick: () => deleteSelection(), danger: true },
+        ]}
+        footerHint="Ctrl/Cmd+G to group, Delete/Backspace to remove all, Escape to deselect."
+      />
+    )
+  }
+
+  if (selectedPipes.length > 0) {
+    if (!pipe) {
+      // Unreachable: 2+ pipes (or a pipe plus anything else) is intercepted
+      // by the mixed-selection branch above — kept as a type-safe fallback.
+      return (
+        <aside className="properties-panel">
+          <p className="properties-empty">Select an instance or pipe to edit its properties.</p>
         </aside>
       )
     }
@@ -364,14 +489,12 @@ export function PropertiesPanel() {
 
   if (selectedShapes.length > 0) {
     if (!shape) {
+      // Unreachable: 2+ shapes (or a shape plus anything else) is
+      // intercepted by the mixed-selection branch above — kept as a
+      // type-safe fallback.
       return (
         <aside className="properties-panel">
-          <h2>{selectedShapes.length} shapes selected</h2>
-          <div className="field-row">
-            <button className="danger" onClick={() => deleteShapes(selectedShapes.map((s) => s.instanceId))}>
-              Delete all
-            </button>
-          </div>
+          <p className="properties-empty">Select an instance or pipe to edit its properties.</p>
         </aside>
       )
     }
@@ -785,18 +908,12 @@ export function PropertiesPanel() {
   }
 
   if (!instance) {
+    // Unreachable in practice: selected.length > 1 is intercepted by the
+    // mixed-selection branch above, and selected.length === 0 by the
+    // "nothing selected" branch — kept only as a type-safe fallback.
     return (
       <aside className="properties-panel">
-        <h2>{selected.length} instances selected</h2>
-        <p className="field-hint">Drag any of them to move the whole group together.</p>
-        <div className="field-row">
-          <button
-            className="danger"
-            onClick={() => deleteInstances(selected.map((i) => i.instanceId))}
-          >
-            Delete all
-          </button>
-        </div>
+        <p className="properties-empty">Select an instance or pipe to edit its properties.</p>
       </aside>
     )
   }

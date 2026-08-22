@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FreeShapeKind, Project } from '@svg-editor/shared'
-import { CanvasView } from './canvas/CanvasView'
+import { CanvasView, type CanvasViewHandle } from './canvas/CanvasView'
 import { PropertiesPanel } from './panels/PropertiesPanel'
 import { LibraryEditorModal } from './panels/LibraryEditorModal'
 import { ProjectsModal } from './panels/ProjectsModal'
@@ -9,6 +9,7 @@ import type { Point } from './canvas/SvgCanvas'
 import { downloadSvgFile, exportProjectToSvg } from './export/svgExport'
 import { listComponentTypes, useCustomComponentSpecs } from './library'
 import { ComponentIcon } from './components/ComponentIcon'
+import { describeComposition } from './state/selectionDescription'
 
 const SYNC_STATUS_LABELS: Record<string, string> = {
   unsaved: 'Not saved yet',
@@ -140,6 +141,9 @@ export default function App() {
   const selectedLeaderLineIds = useProjectStore((s) => s.selectedLeaderLineIds)
   const selectLeaderLines = useProjectStore((s) => s.selectLeaderLines)
   const deleteLeaderLines = useProjectStore((s) => s.deleteLeaderLines)
+  const selectedGroupId = useProjectStore((s) => s.selectedGroupId)
+  const createGroup = useProjectStore((s) => s.createGroup)
+  const ungroup = useProjectStore((s) => s.ungroup)
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const toggleLayersPanel = useProjectStore((s) => s.toggleLayersPanel)
@@ -176,9 +180,19 @@ export default function App() {
   const resolveConflictKeepMine = useProjectStore((s) => s.resolveConflictKeepMine)
   const resolveConflictReloadTheirs = useProjectStore((s) => s.resolveConflictReloadTheirs)
 
+  const selectionCounts = {
+    instances: selectedInstanceIds.length,
+    pipes: selectedPipeIds.length,
+    shapes: selectedShapeIds.length,
+    leaderLines: selectedLeaderLineIds.length,
+  }
+  const selectionTotal =
+    selectionCounts.instances + selectionCounts.pipes + selectionCounts.shapes + selectionCounts.leaderLines
+
   const [libraryEditorOpen, setLibraryEditorOpen] = useState(false)
   const [projectsModalOpen, setProjectsModalOpen] = useState(false)
   const importFileInputRef = useRef<HTMLInputElement>(null)
+  const canvasViewRef = useRef<CanvasViewHandle>(null)
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -233,8 +247,21 @@ export default function App() {
         return
       }
 
+      if ((evt.ctrlKey || evt.metaKey) && (evt.key === 'g' || evt.key === 'G')) {
+        evt.preventDefault()
+        if (evt.shiftKey) {
+          if (selectedGroupId) ungroup(selectedGroupId)
+        } else if (selectionTotal >= 2) {
+          createGroup()
+        }
+        return
+      }
+
       if (evt.key === 'Escape') {
         evt.preventDefault()
+        // Always exits "entered" group-editing mode too, same as clicking
+        // empty canvas would — harmless when nothing was entered.
+        canvasViewRef.current?.clearEnteredGroup()
         if (tool !== 'select') {
           cancelTool()
         } else if (selectedWaypoint) {
@@ -300,6 +327,7 @@ export default function App() {
     selectedWaypoint,
     selectedShapeIds,
     selectedLeaderLineIds,
+    selectedGroupId,
     selectedLayerId,
     layersPanelOpen,
     cancelTool,
@@ -321,6 +349,8 @@ export default function App() {
     nudgeSelection,
     undo,
     redo,
+    createGroup,
+    ungroup,
   ])
 
   return (
@@ -555,7 +585,7 @@ export default function App() {
         </div>
       )}
       <div className="app-body">
-        <CanvasView />
+        <CanvasView ref={canvasViewRef} />
         <PropertiesPanel />
       </div>
       <footer className="app-statusbar">
@@ -569,17 +599,13 @@ export default function App() {
             ? `editing waypoint ${selectedWaypoint.index} of ${selectedWaypoint.pipeId}`
             : selectedRole
               ? `editing ${selectedRole.role} of ${selectedRole.instanceId}`
-              : selectedPipeIds.length > 0
-                ? `${selectedPipeIds.length} pipe${selectedPipeIds.length === 1 ? '' : 's'} selected`
-                : selectedShapeIds.length > 0
-                  ? `${selectedShapeIds.length} shape${selectedShapeIds.length === 1 ? '' : 's'} selected`
-                  : selectedLeaderLineIds.length > 0
-                    ? `${selectedLeaderLineIds.length} leader line${selectedLeaderLineIds.length === 1 ? '' : 's'} selected`
-                    : selectedInstanceIds.length === 0
-                      ? 'nothing selected'
-                      : selectedInstanceIds.length === 1
-                        ? `selected: ${selectedInstanceIds[0]}`
-                        : `${selectedInstanceIds.length} selected`}
+              : selectionTotal === 0
+                ? 'nothing selected'
+                : selectedGroupId
+                  ? `group selected (${describeComposition(selectionCounts)})`
+                  : selectionTotal === 1 && selectedInstanceIds.length === 1
+                    ? `selected: ${selectedInstanceIds[0]}`
+                    : `${selectionTotal} selected (${describeComposition(selectionCounts)})`}
         </span>
       </footer>
       {libraryEditorOpen && <LibraryEditorModal onClose={() => setLibraryEditorOpen(false)} />}
