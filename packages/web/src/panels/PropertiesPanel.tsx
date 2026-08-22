@@ -50,14 +50,14 @@ function ColorPickerRow({
 /**
  * Shared body for "a persisted Group is selected" and "2+ things are
  * selected but not (yet) grouped" — same composition summary, same
- * shared-style broadcast (only instances/shapes have a fill; instances,
- * pipes, and shapes all have some notion of stroke/line color; only
- * instances have a separate text color — see RoleInstance/PipeInstance/
- * FreeShapeStyle/LeaderLine in types.ts, leader lines have no style fields
- * at all so they never gate a row in), same action-buttons-plus-hint
- * layout. Differs only in heading, which action buttons are offered, and
- * where the style edit is applied (a Group's members vs. the raw
- * selection) — both wired in by the caller.
+ * shared-style broadcast, same action-buttons-plus-hint layout. The style
+ * broadcast is split into one fieldset per kind (Labels/Pipes/Shapes) so a
+ * swatch only ever touches the kind its section names — no single "Stroke"
+ * control silently recoloring label borders, pipe lines, and shape outlines
+ * all at once. Leader lines have no style fields at all (see LeaderLine in
+ * types.ts) so they never get a section. Differs only in heading, which
+ * action buttons are offered, and where the style edit is applied (a
+ * Group's members vs. the raw selection) — both wired in by the caller.
  */
 function SelectionStylePanel({
   heading,
@@ -72,24 +72,35 @@ function SelectionStylePanel({
   actions: { label: string; onClick: () => void; danger?: boolean }[]
   footerHint: string
 }) {
-  const showFill = counts.instances > 0 || counts.shapes > 0
-  const showStroke = counts.instances > 0 || counts.pipes > 0 || counts.shapes > 0
-  const showText = counts.instances > 0
-
   return (
     <aside className="properties-panel">
       <h2>{heading}</h2>
       <p className="field-hint">{describeComposition(counts)}</p>
 
-      {(showFill || showStroke || showText) && (
+      {counts.instances > 0 && (
         <fieldset className="field roles-field">
-          <legend>Shared style</legend>
-          <p className="field-hint">Applies to every selected item of a matching kind at once, as a single undo step.</p>
-          {showFill && <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('fill', v)} />}
-          {showStroke && (
-            <ColorPickerRow label="Stroke" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
-          )}
-          {showText && <ColorPickerRow label="Text" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('text', v)} />}
+          <legend>Labels</legend>
+          <p className="field-hint">Applies to every label on every selected instance at once, as a single undo step.</p>
+          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('fill', v)} />
+          <ColorPickerRow label="Border" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
+          <ColorPickerRow label="Text" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('text', v)} />
+        </fieldset>
+      )}
+
+      {counts.pipes > 0 && (
+        <fieldset className="field roles-field">
+          <legend>Pipes</legend>
+          <p className="field-hint">Applies to every selected pipe at once, as a single undo step.</p>
+          <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
+        </fieldset>
+      )}
+
+      {counts.shapes > 0 && (
+        <fieldset className="field roles-field">
+          <legend>Shapes</legend>
+          <p className="field-hint">Applies to every selected shape at once, as a single undo step.</p>
+          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('fill', v)} />
+          <ColorPickerRow label="Stroke" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
         </fieldset>
       )}
 
