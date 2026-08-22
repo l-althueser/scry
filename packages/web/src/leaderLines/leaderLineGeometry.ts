@@ -8,7 +8,7 @@ import type {
   LeaderLineEndpointRef,
   PipeInstance,
 } from '@svg-editor/shared'
-import { pointAlongPolyline } from '../geometry/polyline'
+import { nearestPointOnPolylineIndexed, pointAlongPolyline } from '../geometry/polyline'
 import { fmt, roleBoxCorners, rotatePoint } from '../library/componentUtils'
 import { getPipePoints } from '../pipes/pipeGeometry'
 import { resolveShapeBorderPoint } from '../shapes/freeShapeGeometry'
@@ -113,6 +113,41 @@ export function detachLeaderLineEndpoints(
   return lines.map((line) => {
     const from = detach(line.from)
     const to = detach(line.to)
+    return from === line.from && to === line.to ? line : { ...line, from, to }
+  })
+}
+
+/**
+ * Re-anchors every `from`/`to` that's a LeaderLineBorderRef on `pipeId`
+ * after that pipe's own point list changed shape (a waypoint inserted or
+ * removed) — `oldPoints`/`newPoints` are its point list immediately before
+ * and after that edit. Unlike a PortRef's exact "pt:{index}" identity (see
+ * shiftPipePointRefsForInsert/Delete in pipeGeometry.ts, which just
+ * renumber), a border anchor's segmentIndex/t names a *continuous* position
+ * that can end up split across two segments by an insertion in the middle
+ * of it — there's no index arithmetic that represents that exactly. Instead
+ * this resolves the anchor's world position against `oldPoints`, then
+ * re-projects that same position onto `newPoints` (nearestPointOnPolylineIndexed)
+ * to get a fresh segmentIndex/t at the same physical spot, however the
+ * segment boundaries moved.
+ */
+export function shiftLeaderLinePipeAnchorsForPipeChange(
+  lines: LeaderLine[],
+  pipeId: string,
+  oldPoints: Point[],
+  newPoints: Point[],
+): LeaderLine[] {
+  const reanchor = (ep: LeaderLineEndpoint): LeaderLineEndpoint => {
+    if (!isBorderRef(ep) || ep.targetKind !== 'pipe' || ep.targetId !== pipeId) return ep
+    const worldPos = pointAlongPolyline(oldPoints, ep.segmentIndex, ep.t)
+    if (!worldPos) return ep
+    const hit = nearestPointOnPolylineIndexed(newPoints, worldPos)
+    if (!hit) return ep
+    return { ...ep, segmentIndex: hit.segmentIndex, t: hit.t }
+  }
+  return lines.map((line) => {
+    const from = reanchor(line.from)
+    const to = reanchor(line.to)
     return from === line.from && to === line.to ? line : { ...line, from, to }
   })
 }

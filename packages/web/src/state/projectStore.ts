@@ -35,12 +35,19 @@ import { downloadTextFile } from '../export/downloadFile'
 import { computePipeVolumeGroups } from '../pipes/pipeVolumes'
 import {
   detachPipesFromInstances,
+  getPipePoints,
   IMAGE_POINT_PREFIX,
   PIPE_POINT_PREFIX,
   pipePointPortId,
   resolvePortRefWorldPosition,
+  shiftPipePointRefsForDelete,
+  shiftPipePointRefsForInsert,
 } from '../pipes/pipeGeometry'
-import { detachLeaderLineEndpoints, resolveLeaderLineEndpoint } from '../leaderLines/leaderLineGeometry'
+import {
+  detachLeaderLineEndpoints,
+  resolveLeaderLineEndpoint,
+  shiftLeaderLinePipeAnchorsForPipeChange,
+} from '../leaderLines/leaderLineGeometry'
 import { computeAutoRoute } from '../routing/autoRoute'
 import { DEFAULT_FONT_SIZE, DEFAULT_SHAPE_STYLE } from '../shapes/freeShapeGeometry'
 
@@ -1591,10 +1598,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ),
     })),
 
+  // Inserting/deleting a waypoint shifts the index of every later point in
+  // this pipe's own point list (getPipePoints: [fromPos, ...waypoints,
+  // toPos]) — any other pipe branched onto one of those points via a
+  // "pt:{index}" PortRef, or any leader line anchored onto this pipe's
+  // border, must be renumbered/re-anchored in the same action or it ends up
+  // silently naming a different physical point (see shiftPipePointRefsFor*
+  // / shiftLeaderLinePipeAnchorsForPipeChange for why each uses a different
+  // fix-up strategy).
   insertPipeWaypoint: (pipeId, index, pt) =>
-    set((state) => ({
-      ...pushHistory(state),
-      pipes: state.pipes.map((p) =>
+    set((state) => {
+      const pipe = state.pipes.find((p) => p.instanceId === pipeId)
+      if (!pipe) return {}
+      const insertedPointIndex = index + 1 // waypoint-array index -> full-point-list index (fromPos is always point 0)
+      const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers)
+      const pipes = shiftPipePointRefsForInsert(state.pipes, pipeId, insertedPointIndex).map((p) =>
         p.instanceId === pipeId
           ? {
               ...p,
@@ -1605,25 +1623,50 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               ],
             }
           : p,
-      ),
-      selectedPipeIds: [pipeId],
-      selectedInstanceIds: [],
-      selectedRole: null,
-      selectedShapeIds: [],
-      selectedLayerId: null,
-      selectedWaypoint: { pipeId, index },
-      tagRenameError: null,
-      routeError: null,
-    })),
+      )
+      const newPipe = pipes.find((p) => p.instanceId === pipeId)!
+      const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers)
+      const leaderLines =
+        oldPoints && newPoints
+          ? shiftLeaderLinePipeAnchorsForPipeChange(state.leaderLines, pipeId, oldPoints, newPoints)
+          : state.leaderLines
+      return {
+        ...pushHistory(state),
+        pipes,
+        leaderLines,
+        selectedPipeIds: [pipeId],
+        selectedInstanceIds: [],
+        selectedRole: null,
+        selectedShapeIds: [],
+        selectedLayerId: null,
+        selectedWaypoint: { pipeId, index },
+        tagRenameError: null,
+        routeError: null,
+      }
+    }),
 
   deletePipeWaypoint: (pipeId, index) =>
-    set((state) => ({
-      ...pushHistory(state),
-      pipes: state.pipes.map((p) =>
-        p.instanceId === pipeId ? { ...p, waypoints: p.waypoints.filter((_, i) => i !== index) } : p,
-      ),
-      selectedWaypoint: null,
-    })),
+    set((state) => {
+      const pipe = state.pipes.find((p) => p.instanceId === pipeId)
+      if (!pipe) return {}
+      const removedPointIndex = index + 1
+      const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers)
+      const pipes = shiftPipePointRefsForDelete(state.pipes, state.instances, state.layers, pipeId, removedPointIndex).map(
+        (p) => (p.instanceId === pipeId ? { ...p, waypoints: p.waypoints.filter((_, i) => i !== index) } : p),
+      )
+      const newPipe = pipes.find((p) => p.instanceId === pipeId)!
+      const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers)
+      const leaderLines =
+        oldPoints && newPoints
+          ? shiftLeaderLinePipeAnchorsForPipeChange(state.leaderLines, pipeId, oldPoints, newPoints)
+          : state.leaderLines
+      return {
+        ...pushHistory(state),
+        pipes,
+        leaderLines,
+        selectedWaypoint: null,
+      }
+    }),
 
   movePipeEndpoint: (pipeId, side, ref) =>
     set((state) => ({

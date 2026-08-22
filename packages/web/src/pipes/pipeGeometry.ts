@@ -179,6 +179,73 @@ export function getPipePoints(
   return [fromPos, ...pipe.waypoints.map((w) => ({ x: w.x, y: w.y })), toPos]
 }
 
+/**
+ * Renumbers every OTHER pipe's `fromPort`/`toPort` that branches off one of
+ * `pipeId`'s own points (a "pt:{index}" PortRef) after a new waypoint is
+ * spliced into `pipeId`'s point list at `insertedPointIndex` (a full-point-
+ * list index — see getPipePoints: index 0 is fromPos, the last is toPos, so
+ * a waypoint-array insertion at position `i` lands at point-list index
+ * `i + 1`). Every existing point at or after that index shifts up by one,
+ * so a ref naming it must shift too, or it silently ends up naming whatever
+ * new point happens to have that old index — the exact bug this fixes.
+ * Exact/lossless: unlike a leader line's segmentIndex/t (see
+ * shiftLeaderLinePipeAnchorsForPipeChange in leaderLineGeometry.ts), a
+ * PortRef names one discrete existing point, so renumbering it is all
+ * that's needed — no position math, no ambiguity.
+ */
+export function shiftPipePointRefsForInsert(
+  pipes: PipeInstance[],
+  pipeId: string,
+  insertedPointIndex: number,
+): PipeInstance[] {
+  const shiftEnd = (ref: PortRef | FreePoint): PortRef | FreePoint => {
+    if (!isPortRef(ref) || ref.instanceId !== pipeId || !ref.portId.startsWith(PIPE_POINT_PREFIX)) return ref
+    const idx = Number(ref.portId.slice(PIPE_POINT_PREFIX.length))
+    if (!Number.isInteger(idx) || idx < insertedPointIndex) return ref
+    return { ...ref, portId: pipePointPortId(idx + 1) }
+  }
+  return pipes.map((p) => {
+    const fromPort = shiftEnd(p.fromPort)
+    const toPort = shiftEnd(p.toPort)
+    return fromPort === p.fromPort && toPort === p.toPort ? p : { ...p, fromPort, toPort }
+  })
+}
+
+/**
+ * Inverse of shiftPipePointRefsForInsert, for a point being removed from
+ * `pipeId` at `removedPointIndex` (again a full-point-list index): every ref
+ * naming a later point shifts down by one to keep naming the same physical
+ * point, and a ref naming *exactly* the removed point is detached — resolved
+ * to its last known world position (via the pre-removal `pipes`/`instances`/
+ * `layers`) and frozen as a FreePoint, the same "leave a knot instead of
+ * dangling" contract detachPipesFromInstances already uses when a component
+ * a pipe was attached to gets deleted. Call with the pipe/instance/layer
+ * arrays as they stood *before* the removal.
+ */
+export function shiftPipePointRefsForDelete(
+  pipes: PipeInstance[],
+  instances: ComponentInstance[],
+  layers: Layer[],
+  pipeId: string,
+  removedPointIndex: number,
+): PipeInstance[] {
+  const adjustEnd = (ref: PortRef | FreePoint): PortRef | FreePoint => {
+    if (!isPortRef(ref) || ref.instanceId !== pipeId || !ref.portId.startsWith(PIPE_POINT_PREFIX)) return ref
+    const idx = Number(ref.portId.slice(PIPE_POINT_PREFIX.length))
+    if (!Number.isInteger(idx)) return ref
+    if (idx === removedPointIndex) {
+      return resolvePortRefWorldPosition(ref, instances, pipes, layers) ?? ref
+    }
+    if (idx < removedPointIndex) return ref
+    return { ...ref, portId: pipePointPortId(idx - 1) }
+  }
+  return pipes.map((p) => {
+    const fromPort = adjustEnd(p.fromPort)
+    const toPort = adjustEnd(p.toPort)
+    return fromPort === p.fromPort && toPort === p.toPort ? p : { ...p, fromPort, toPort }
+  })
+}
+
 export function midpoint(points: Point[]): Point {
   if (points.length === 0) return { x: 0, y: 0 }
   if (points.length === 1) return points[0]
