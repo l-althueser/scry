@@ -1,5 +1,6 @@
 import type { ComponentInstance, Port, RoleInstance, Suffix } from '@svg-editor/shared'
 import {
+  DEFAULT_INDICATOR_COLOR,
   LABEL_BOX_HEIGHT,
   LABEL_BOX_WIDTH,
   NAME_TEXT_BASELINE_Y,
@@ -183,10 +184,28 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       bodyGroup.appendChild(img)
     }
 
+    // Invisible hit-area covering the body silhouette (same geometry as
+    // indicatorShapes) — a non-colorable body's indicatorShapes render with
+    // fill:none (see bodyFillColor below), and a fill:none path only
+    // registers pointer hits along its stroke, not its interior; without
+    // this, clicking inside an "empty" circle (e.g. compressor/flow meter
+    // with the indicator role off) misses the instance entirely, same
+    // problem nameHitArea already solves for the name role's thin text.
+    // Always present regardless of indicator/colorable state.
+    const bodyHitGroup = document.createElementNS(SVG_NS, 'g')
+    bodyHitGroup.setAttribute('class', 'gv-valve-body-hit')
+    bodyHitGroup.setAttribute('fill', 'transparent')
+    for (const shape of spec.indicatorShapes) {
+      const path = document.createElementNS(SVG_NS, 'path')
+      path.setAttribute('d', shape.d)
+      bodyHitGroup.appendChild(path)
+    }
+    bodyGroup.appendChild(bodyHitGroup)
+
     const indicatorGroup = document.createElementNS(SVG_NS, 'g')
     indicatorGroup.setAttribute('class', 'gv-role gv-role-indicator')
     indicatorGroup.setAttribute('data-role', 'indicator')
-    indicatorGroup.setAttribute('fill', 'black')
+    indicatorGroup.setAttribute('fill', DEFAULT_INDICATOR_COLOR)
     for (const shape of spec.indicatorShapes) {
       const path = document.createElementNS(SVG_NS, 'path')
       path.setAttribute('d', shape.d)
@@ -339,7 +358,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
 
       if (role.role === 'indicator') {
         lines.push(
-          `    <g id="${tag}_indicator" transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})${transformSuffix}" fill="black">`,
+          `    <g id="${tag}_indicator" transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})${transformSuffix}" fill="${DEFAULT_INDICATOR_COLOR}">`,
         )
         for (const shape of spec.indicatorShapes) {
           lines.push(`      <path d="${shape.d}" />`)

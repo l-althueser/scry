@@ -1,5 +1,6 @@
 import type { ComponentInstance, Port, RoleInstance } from '@svg-editor/shared'
 import {
+  DEFAULT_INDICATOR_COLOR,
   LABEL_BOX_HEIGHT,
   LABEL_BOX_WIDTH,
   NAME_TEXT_BASELINE_Y,
@@ -300,7 +301,7 @@ function render(group: SVGGElement) {
   const indicatorGroup = document.createElementNS(SVG_NS, 'g')
   indicatorGroup.setAttribute('class', 'gv-role gv-role-indicator')
   indicatorGroup.setAttribute('data-role', 'indicator')
-  indicatorGroup.setAttribute('fill', 'black')
+  indicatorGroup.setAttribute('fill', DEFAULT_INDICATOR_COLOR)
   appendShapeSlots(indicatorGroup, false)
   bodyGroup.appendChild(indicatorGroup)
 
@@ -463,7 +464,7 @@ function exportInstance(instance: ComponentInstance): string[] {
 
     if (role.role === 'indicator') {
       lines.push(
-        `    <g id="${tag}_indicator" transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})" fill="black">`,
+        `    <g id="${tag}_indicator" transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})" fill="${DEFAULT_INDICATOR_COLOR}">`,
       )
       lines.push(`      ${shapeSvgElement(shape, width, height, '')}`)
       lines.push(`    </g>`)

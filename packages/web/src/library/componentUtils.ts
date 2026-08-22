@@ -9,6 +9,17 @@ export const LABEL_ROLE_ORDER: Suffix[] = ['name', 'value', 'setpoint']
 export const PLACEHOLDER_ROLE_TEXT = 'waiting ...'
 
 /**
+ * Default fill for an "_indicator" role before Node-RED ever touches it —
+ * purely this editor's own static/preview color, both in the live canvas
+ * and in the exported SVG. Distinct from Node-RED's own runtime color
+ * scheme (Black/LawnGreen/IndianRed per .claude/CLAUDE.md's documented
+ * contract) — a live Node-RED flow overwrites this with "Black" on init
+ * regardless, so this only affects what's visible before that happens (or
+ * if the SVG is ever viewed outside Node-RED).
+ */
+export const DEFAULT_INDICATOR_COLOR = 'gray'
+
+/**
  * Packs the enabled name/value/setpoint roles into a gap-free vertical
  * stack (value above setpoint when both are enabled — see LABEL_ROLE_ORDER),
  * without touching the position of a `manuallyPositioned` role: those are

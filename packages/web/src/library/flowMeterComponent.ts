@@ -33,7 +33,14 @@ registerIconComponentType({
   tagPrefix: 'FM',
   category: 'Instruments',
   indicatorShapes: [{ d: CIRCLE_D }],
-  outlineExtras: [{ d: TOP_ARC_D }, { d: BOTTOM_ARC_D }, { d: STUB_IN_D }, { d: STUB_OUT_D }],
+  // Stubs get strokeWidth 2 to match a connected pipe's own line width — see
+  // burstDiskComponent.ts's comment for why.
+  outlineExtras: [
+    { d: TOP_ARC_D },
+    { d: BOTTOM_ARC_D },
+    { d: STUB_IN_D, strokeWidth: 2 },
+    { d: STUB_OUT_D, strokeWidth: 2 },
+  ],
   localBodyCorners: [
     { x: 0, y: CY - R },
     { x: 34.02, y: CY - R },

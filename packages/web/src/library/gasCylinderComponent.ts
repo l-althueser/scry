@@ -22,7 +22,9 @@ registerIconComponentType({
   tagPrefix: 'GC',
   category: 'Equipment',
   indicatorShapes: [{ d: OUTLINE_D }],
-  outlineExtras: [{ d: STUB_D }],
+  // strokeWidth 2 to match a connected pipe's own line width — see
+  // burstDiskComponent.ts's comment for why.
+  outlineExtras: [{ d: STUB_D, strokeWidth: 2 }],
   // Wide enough to also cover the optional dewar shape (x: -6..26, y up to
   // 54) even though most instances won't have it enabled — a little extra
   // padding in the export viewBox/auto-route obstacle box for those that
