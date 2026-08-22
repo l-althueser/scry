@@ -143,6 +143,16 @@ async function seedExampleProject() {
 const app = express()
 app.use(express.json({ limit: '20mb' }))
 
+// Logs every request on completion (method, path, status, duration) so
+// Portainer's log view shows real client activity, not just startup lines.
+app.use((req, res, next) => {
+  const start = Date.now()
+  res.on('finish', () => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - start}ms)`)
+  })
+  next()
+})
+
 // Opt-in HTTP Basic Auth, gated on both env vars being set (see their
 // declarations above) — a no-op middleware otherwise, so an unconfigured
 // deployment behaves exactly as it did before this feature existed.
@@ -195,6 +205,7 @@ app.get('/api/projects/:name', async (req, res) => {
   try {
     const content = await fsp.readFile(projectFilePath(name), 'utf8')
     res.type('application/json').send(content)
+    console.log(`Project "${name}" loaded by client`)
   } catch {
     res.status(404).json({ error: 'project not found' })
   }
@@ -210,6 +221,7 @@ app.put('/api/projects/:name', async (req, res) => {
     await maybeSnapshotVersion(name)
     await fsp.writeFile(projectFilePath(name), JSON.stringify(req.body, null, 2), 'utf8')
     res.json({ status: 'ok' })
+    console.log(`Project "${name}" synced (saved) by client`)
   } catch (err) {
     console.error(`Failed to save project "${name}":`, err)
     res.status(500).json({ error: 'failed to save project' })
@@ -274,6 +286,7 @@ app.post('/api/projects/:name/versions/:timestamp/restore', async (req, res) => 
     restored.meta = { ...restored.meta, id: name, name, modifiedAt: new Date().toISOString() }
     await fsp.writeFile(projectFilePath(name), JSON.stringify(restored, null, 2), 'utf8')
     res.json({ status: 'ok' })
+    console.log(`Project "${name}" restored to version ${timestamp}`)
   } catch (err) {
     console.error(`Failed to restore version ${timestamp} of "${name}":`, err)
     res.status(404).json({ error: 'version not found' })
@@ -292,6 +305,7 @@ app.get('/api/projects/:name/meta', async (req, res) => {
     const content = await fsp.readFile(projectFilePath(name), 'utf8')
     const project = JSON.parse(content)
     res.json({ meta: project.meta })
+    console.log(`Sync-check poll for "${name}"`)
   } catch {
     res.status(404).json({ error: 'project not found' })
   }
@@ -308,6 +322,7 @@ app.delete('/api/projects/:name', async (req, res) => {
   try {
     await fsp.rename(projectFilePath(name), trashFilePath(name))
     res.json({ status: 'ok' })
+    console.log(`Project "${name}" trashed`)
   } catch (err) {
     console.error(`Failed to trash project "${name}":`, err)
     res.status(404).json({ error: 'project not found' })
@@ -330,6 +345,7 @@ app.post('/api/projects/:name/rename', async (req, res) => {
     await fsp.writeFile(projectFilePath(newName), content, 'utf8')
     await fsp.unlink(projectFilePath(name))
     res.json({ status: 'ok' })
+    console.log(`Project "${name}" renamed to "${newName}"`)
   } catch (err) {
     console.error(`Failed to rename project "${name}" to "${newName}":`, err)
     res.status(404).json({ error: 'project not found' })
@@ -351,6 +367,7 @@ app.post('/api/projects/:name/duplicate', async (req, res) => {
     const content = await readProjectRenamed(projectFilePath(name), newName)
     await fsp.writeFile(projectFilePath(newName), content, 'utf8')
     res.json({ status: 'ok' })
+    console.log(`Project "${name}" duplicated to "${newName}"`)
   } catch (err) {
     console.error(`Failed to duplicate project "${name}" to "${newName}":`, err)
     res.status(404).json({ error: 'project not found' })
@@ -375,6 +392,7 @@ app.put('/api/library/custom-types', async (req, res) => {
     await fsp.mkdir(LIBRARIES_DIR, { recursive: true })
     await fsp.writeFile(customTypesFilePath(), JSON.stringify(req.body, null, 2), 'utf8')
     res.json({ status: 'ok' })
+    console.log('Custom component library updated')
   } catch (err) {
     console.error('Failed to save custom component library:', err)
     res.status(500).json({ error: 'failed to save custom component library' })
@@ -427,4 +445,6 @@ app.listen(PORT, () => {
   console.log(`  projects:  ${PROJECTS_DIR}`)
   console.log(`  libraries: ${LIBRARIES_DIR}`)
   console.log(`  export:    ${EXPORT_DIR}`)
+  console.log(`  base path: ${BASE_PATH || '(none)'}`)
+  console.log(`  basic auth: ${BASIC_AUTH_USER && BASIC_AUTH_PASSWORD_HASH ? 'enabled' : 'disabled'}`)
 })
