@@ -180,6 +180,8 @@ const MAX_GRID_LINES = 400
 const PORT_SNAP_RADIUS = 12
 /** Screen-pixel radius for alignment-guide snapping, converted to world units per current zoom. */
 const ALIGN_SNAP_PX = 8
+/** Screen-pixel movement below which a pointerdown+pointerup on a pipe endpoint/waypoint counts as a click (triggering coincident-point cycling) rather than a drag — see pipePointCycleCandidate. */
+const CLICK_MOVE_THRESHOLD_PX = 4
 
 type DragMode =
   | 'none'
@@ -227,9 +229,32 @@ export class SvgCanvas {
   private selectedRole: RoleSelection | null = null
   private selectedPipeIds: string[] = []
   private selectedWaypoint: WaypointSelection | null = null
+  /**
+   * Which pipe endpoint ('from'/'to') is currently selected — the endpoint
+   * counterpart to selectedWaypoint, purely internal to this class (no
+   * store/React state, no callback) since it exists only to detect "the
+   * user clicked the already-selected point again" for coincident-point
+   * cycling (see cyclePipePointSelection). Cleared by
+   * applyPipeSelectionHighlight, the single choke point every pipe
+   * selection change (user-driven or external sync) already runs through.
+   */
+  private selectedEndpoint: { pipeId: string; side: PipeEndpointSide } | null = null
   private selectedShapeIds: string[] = []
   private selectedLeaderLineIds: string[] = []
   private selectedLayerId: string | null = null
+
+  /**
+   * Set on pointerdown when an endpointEl/waypointEl click lands on the
+   * already-selected point, cleared on every pointerup — a genuine drag
+   * still needs to start immediately on pointerdown (so the point can be
+   * grabbed and moved in one motion, same as a first-time click), but
+   * coincident-point cycling (see cyclePipePointSelection) should only
+   * actually fire if the pointer never really moved, i.e. this turned out
+   * to be a click, not a drag. Checked against dragStartScreen on
+   * pointerup: below the small pixel threshold there = a click, cycle now;
+   * beyond it = a real drag already happened live, don't also cycle.
+   */
+  private pipePointCycleCandidate: { pipeId: string; point: 'from' | 'to' | number; pos: Point } | null = null
 
   private dragMode: DragMode = 'none'
   private dragStartScreen: Point = { x: 0, y: 0 }
@@ -789,6 +814,73 @@ export class SvgCanvas {
       }
     }
     return best
+  }
+
+  /** Stable sort key for a pipe's own point ('from'/'to'/interior waypoint index) — used only to make coincident-point cycling order deterministic across renders. */
+  private pipePointSortKey(point: 'from' | 'to' | number): string {
+    if (point === 'from') return '0'
+    if (point === 'to') return 'z'
+    return String(point + 1).padStart(6, '0')
+  }
+
+  /**
+   * Every (pipeId, point) in the project whose resolved world position is
+   * within snap range of `pos` — i.e. every pipe endpoint/waypoint
+   * physically sitting at the same junction. A real PortRef branch (see
+   * PIPE_POINT_PREFIX) always resolves to an exact match (distance 0), but
+   * a dead-end pipe whose near end is just a plain FreePoint dragged
+   * visually next to the junction — never actually snapped onto it — can
+   * sit a few units off, so this uses the same PORT_SNAP_RADIUS the rest of
+   * the app already treats as "close enough to count as connected" (the
+   * radius findPortNear itself uses while drawing/dragging), rather than a
+   * near-zero tolerance that would only ever catch the exact-ref case. Used
+   * by cyclePipePointSelection to find what a re-click on an
+   * already-selected point should switch to.
+   */
+  private findCoincidentPipePoints(pos: Point): { pipeId: string; point: 'from' | 'to' | number }[] {
+    const EPS = PORT_SNAP_RADIUS
+    const result: { pipeId: string; point: 'from' | 'to' | number }[] = []
+    for (const pipe of this.latestPipes) {
+      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      if (!points) continue
+      points.forEach((p, idx) => {
+        if (Math.hypot(p.x - pos.x, p.y - pos.y) > EPS) return
+        if (idx === 0) result.push({ pipeId: pipe.instanceId, point: 'from' })
+        else if (idx === points.length - 1) result.push({ pipeId: pipe.instanceId, point: 'to' })
+        else result.push({ pipeId: pipe.instanceId, point: idx - 1 })
+      })
+    }
+    return result
+  }
+
+  /**
+   * Re-clicking a pipe endpoint/waypoint that's already selected cycles to
+   * the next pipe sharing that same physical junction (round-robin,
+   * wrapping back to the first) instead of just re-confirming the same
+   * selection — the user's ask: several pipes meeting at one knot should be
+   * switchable between via repeated clicks, each switch also selecting that
+   * other pipe. Returns false (no-op) when nothing else shares the point,
+   * so the caller falls through to its normal select+start-drag behavior.
+   */
+  private cyclePipePointSelection(pipeId: string, point: 'from' | 'to' | number, pos: Point): boolean {
+    const all = this.findCoincidentPipePoints(pos)
+    if (all.length <= 1) return false
+    all.sort((a, b) =>
+      a.pipeId === b.pipeId
+        ? this.pipePointSortKey(a.point).localeCompare(this.pipePointSortKey(b.point))
+        : a.pipeId.localeCompare(b.pipeId),
+    )
+    const selfIdx = all.findIndex((c) => c.pipeId === pipeId && c.point === point)
+    if (selfIdx === -1) return false
+    const next = all[(selfIdx + 1) % all.length]
+    this.setPipeSelectionFromUser([next.pipeId])
+    if (next.point === 'from' || next.point === 'to') {
+      this.setWaypointSelectionFromUser(null)
+      this.selectedEndpoint = { pipeId: next.pipeId, side: next.point }
+    } else {
+      this.setWaypointSelectionFromUser({ pipeId: next.pipeId, index: next.point })
+    }
+    return true
   }
 
   /**
@@ -1367,12 +1459,30 @@ export class SvgCanvas {
     if (endpointEl) {
       const pipeId = endpointEl.getAttribute('data-pipe-id')!
       const side = endpointEl.getAttribute('data-pipe-endpoint') as PipeEndpointSide
+
+      // Re-clicking the already-selected endpoint cycles to another pipe
+      // sharing this exact junction (see cyclePipePointSelection) — but a
+      // drag still needs to start right away too, in case this press turns
+      // into an actual drag rather than a click; onPointerUp decides which
+      // one it was (via pipePointCycleCandidate + a small movement
+      // threshold) and only performs the cycle if the pointer never
+      // actually moved.
+      const pipe = this.latestPipes.find((p) => p.instanceId === pipeId)
+      const points = pipe && getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      const pos = points ? (side === 'from' ? points[0] : points[points.length - 1]) : null
+      this.pipePointCycleCandidate =
+        pos && this.selectedEndpoint?.pipeId === pipeId && this.selectedEndpoint.side === side
+          ? { pipeId, point: side, pos }
+          : null
+
       this.setPipeSelectionFromUser([pipeId])
       this.setWaypointSelectionFromUser(null)
+      this.selectedEndpoint = { pipeId, side }
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-pipe-endpoint'
       this.dragPipeId = pipeId
       this.dragEndpointSide = side
+      this.dragStartScreen = { x: evt.clientX, y: evt.clientY }
       this.refreshPortMarkers()
       return
     }
@@ -1380,14 +1490,24 @@ export class SvgCanvas {
     if (waypointEl) {
       const pipeId = waypointEl.getAttribute('data-pipe-id')!
       const index = Number(waypointEl.getAttribute('data-waypoint-index'))
+
+      // Same "start the drag either way, decide on release" pattern as the
+      // endpoint branch above.
+      const pipe = this.latestPipes.find((p) => p.instanceId === pipeId)
+      const wp = pipe?.waypoints[index]
+      this.pipePointCycleCandidate =
+        wp && this.selectedWaypoint?.pipeId === pipeId && this.selectedWaypoint.index === index
+          ? { pipeId, point: index, pos: wp }
+          : null
+
       this.setPipeSelectionFromUser([pipeId])
       this.setWaypointSelectionFromUser({ pipeId, index })
+      this.selectedEndpoint = null
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-waypoint'
       this.dragPipeId = pipeId
       this.dragWaypointIndex = index
-      const pipe = this.latestPipes.find((p) => p.instanceId === pipeId)
-      const wp = pipe?.waypoints[index]
+      this.dragStartScreen = { x: evt.clientX, y: evt.clientY }
       this.dragWaypointStartWorld = wp ? { x: wp.x, y: wp.y } : world
       return
     }
@@ -1943,6 +2063,23 @@ export class SvgCanvas {
     if (this.dragMode === 'move-group') {
       this.callbacks.onGroupDragEnd()
     }
+    // A pipe endpoint/waypoint pointerdown always starts a drag immediately
+    // (see endpointEl/waypointEl above), but if it turns out the pointer
+    // never actually moved — a click, not a drag — and it landed on the
+    // already-selected point, cycle to the next pipe sharing that junction
+    // instead (see cyclePipePointSelection/pipePointCycleCandidate).
+    if (
+      (this.dragMode === 'move-pipe-endpoint' || this.dragMode === 'move-waypoint') &&
+      this.pipePointCycleCandidate
+    ) {
+      const dx = evt.clientX - this.dragStartScreen.x
+      const dy = evt.clientY - this.dragStartScreen.y
+      if (Math.hypot(dx, dy) <= CLICK_MOVE_THRESHOLD_PX) {
+        const { pipeId, point, pos } = this.pipePointCycleCandidate
+        this.cyclePipePointSelection(pipeId, point, pos)
+      }
+    }
+    this.pipePointCycleCandidate = null
     if (this.dragMode === 'move-pipe-endpoint' && this.dragPipeId !== null) {
       this.callbacks.onPipeEndpointDragEnd(this.dragPipeId)
     }
@@ -2425,6 +2562,20 @@ export class SvgCanvas {
       this.pipeEls.get(id)?.classList.add('gv-selected')
     }
     this.selectedPipeIds = pipeIds
+    // Only invalidated when the endpoint's own pipe actually drops out of
+    // the selection, not on every call — this function also runs as an
+    // external sync (setPipeSelection) every time the *store's*
+    // selectedPipeIds changes, which includes the redundant round-trip
+    // right after the endpointEl click branch's own setPipeSelectionFromUser
+    // call. Resetting unconditionally here wiped selectedEndpoint before the
+    // user's next click could ever see it "already selected", silently
+    // breaking coincident-point cycling one step in (see
+    // cyclePipePointSelection) — cycle *into* an endpoint worked, cycling
+    // *out of* one didn't, since a real selection change (a different pipe)
+    // still correctly clears it below.
+    if (this.selectedEndpoint && !pipeIds.includes(this.selectedEndpoint.pipeId)) {
+      this.selectedEndpoint = null
+    }
     this.refreshWaypointHandles()
   }
 
