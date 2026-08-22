@@ -1316,7 +1316,13 @@ export class SvgCanvas {
           y: p.y,
           kind: 'corner',
         }))
-        this.callbacks.onPipeAdded(this.pipeDraft.fromPort, hit.ref, waypoints, evt.shiftKey)
+        // Always stays in the tool after finishing a connection (unlike
+        // instance/shape/connection-point placement, which only does this
+        // when Shift is held) — a diagram is usually a whole connected
+        // network of pipes, not one segment. Escape (the Escape-driven
+        // stub-finish just below hardcodes `false`) or re-clicking the pipe
+        // tool button are the only ways out.
+        this.callbacks.onPipeAdded(this.pipeDraft.fromPort, hit.ref, waypoints, true)
         this.clearPipeDraft()
         return
       }

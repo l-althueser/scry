@@ -342,6 +342,38 @@ body {
   margin: 0 0 0.5rem;
 }
 
+.shortcut-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.shortcut-badge {
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-size: 0.68rem;
+  color: #555;
+  background: #f0f0f0;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  cursor: default;
+}
+
+.shortcut-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.info-icon {
+  display: inline-block;
+  margin-left: 0.3rem;
+  color: #999;
+  font-size: 0.8em;
+  cursor: help;
+}
+
 /*
  * Groups related fields into a visibly boxed section (border + tint), with
  * the legend acting as a compact section header — e.g. "Roles", "Label:

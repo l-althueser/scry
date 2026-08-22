@@ -16,22 +16,36 @@ import { loadImageFile } from '../import/loadImageFile'
 import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint } from '../library'
 import { describeComposition, type CompositionCounts } from '../state/selectionDescription'
 
-/** One color field, same single-line layout everywhere it's used: label + swatch + None + Default. `value` null/undefined means "at default". */
+/** A small "ⓘ" glyph carrying a hover tooltip (native title) — tucks a long explanation out of the way, right next to whatever it explains, instead of a permanent paragraph taking up space below it. */
+function InfoIcon({ text }: { text: string }) {
+  return (
+    <span className="info-icon" title={text}>
+      ⓘ
+    </span>
+  )
+}
+
+/** One color field, same single-line layout everywhere it's used: label + swatch + None + Default. `value` null/undefined means "at default". `hint`, if given, becomes an InfoIcon next to the label instead of a separate paragraph. */
 function ColorPickerRow({
   label,
   value,
   defaultValue,
   onChange,
+  hint,
 }: {
   label: string
   value: string | null | undefined
   defaultValue: string
   onChange: (value: string | null) => void
+  hint?: string
 }) {
   const isTransparent = value === 'transparent'
   return (
     <div className="field-row color-row">
-      <span className="color-row-label">{label}</span>
+      <span className="color-row-label">
+        {label}
+        {hint && <InfoIcon text={hint} />}
+      </span>
       <input
         type="color"
         value={isTransparent ? defaultValue : (value ?? defaultValue)}
@@ -46,6 +60,51 @@ function ColorPickerRow({
         Default
       </button>
     </div>
+  )
+}
+
+/** One reusable shortcut, keyed so every panel branch references the same keys/wording instead of each hand-writing its own — see ShortcutHint. */
+const SHORTCUT = {
+  duplicate: { keys: 'Ctrl+D', label: 'Duplicate selection' },
+  copy: { keys: 'Ctrl+C', label: 'Copy selection' },
+  group: { keys: 'Ctrl+G', label: 'Group selection' },
+  ungroup: { keys: 'Ctrl+Shift+G', label: 'Ungroup' },
+  deleteOne: { keys: 'Del', label: 'Delete' },
+  deleteAll: { keys: 'Del', label: 'Delete all' },
+  deselect: { keys: 'Esc', label: 'Deselect' },
+  selectAll: { keys: 'Ctrl+A', label: 'Select all' },
+  undo: { keys: 'Ctrl+Z', label: 'Undo' },
+  redo: { keys: 'Ctrl+Shift+Z', label: 'Redo (also Ctrl+Y)' },
+  move: { keys: '↑↓←→', label: 'Move — hold Shift for bigger steps' },
+  rotate: { keys: 'R', label: 'Rotate 90°' },
+} as const
+
+/** A row of compact key-badges — the visible shortcut only; the full description is a native hover tooltip (title), not permanent text, so the panel stays scannable instead of a paragraph. Fits anywhere the badge's meaning is already obvious from context (e.g. "Del"/"Esc" right after a delete button). */
+function ShortcutHint({ items }: { items: readonly { keys: string; label: string }[] }) {
+  return (
+    <p className="field-hint shortcut-hint">
+      {items.map((it) => (
+        <kbd key={it.keys + it.label} className="shortcut-badge" title={it.label}>
+          {it.keys}
+        </kbd>
+      ))}
+    </p>
+  )
+}
+
+/** Same badges as ShortcutHint, but each one keeps a short inline word next to it — for shortcuts with no surrounding context to imply what they do (e.g. general app shortcuts on the empty-selection panel), a bare badge reads as a non-sequitur without hovering. */
+function LabeledShortcutHint({ items }: { items: readonly { keys: string; word: string; label: string }[] }) {
+  return (
+    <p className="field-hint shortcut-hint">
+      {items.map((it) => (
+        <span key={it.keys + it.label} className="shortcut-pair">
+          <kbd className="shortcut-badge" title={it.label}>
+            {it.keys}
+          </kbd>
+          {it.word}
+        </span>
+      ))}
+    </p>
   )
 }
 
@@ -67,14 +126,17 @@ function SelectionStylePanel({
   onStyleChange,
   onPipeFlagChange,
   actions,
-  footerHint,
+  footerNote,
+  shortcuts,
 }: {
   heading: string
   counts: CompositionCounts
   onStyleChange: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
   onPipeFlagChange: (field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   actions: { label: string; onClick: () => void; danger?: boolean }[]
-  footerHint: string
+  /** Plain-text note for anything that isn't a pure keyboard shortcut (e.g. "double-click a member to edit it individually") — shown above the badge row. */
+  footerNote?: string
+  shortcuts: readonly { keys: string; label: string }[]
 }) {
   return (
     <aside className="properties-panel">
@@ -126,7 +188,8 @@ function SelectionStylePanel({
           </button>
         ))}
       </div>
-      <p className="field-hint">{footerHint}</p>
+      {footerNote && <p className="field-hint">{footerNote}</p>}
+      <ShortcutHint items={shortcuts} />
     </aside>
   )
 }
@@ -309,7 +372,8 @@ export function PropertiesPanel() {
           { label: 'Ungroup', onClick: () => ungroup(selectedGroupId) },
           { label: 'Delete group', onClick: () => deleteGroup(selectedGroupId), danger: true },
         ]}
-        footerHint="Double-click a member to edit it individually. Ctrl/Cmd+D to duplicate, Ctrl/Cmd+C to copy, Ctrl/Cmd+Shift+G to ungroup, Escape to deselect."
+        footerNote="Double-click a member to edit it individually."
+        shortcuts={[SHORTCUT.duplicate, SHORTCUT.copy, SHORTCUT.ungroup, SHORTCUT.deselect]}
       />
     )
   }
@@ -339,7 +403,7 @@ export function PropertiesPanel() {
           { label: 'Group', onClick: () => createGroup() },
           { label: 'Delete all', onClick: () => deleteSelection(), danger: true },
         ]}
-        footerHint="Ctrl/Cmd+D to duplicate, Ctrl/Cmd+C to copy, Ctrl/Cmd+G to group, Delete/Backspace to remove all, Escape to deselect."
+        shortcuts={[SHORTCUT.duplicate, SHORTCUT.copy, SHORTCUT.group, SHORTCUT.deleteAll, SHORTCUT.deselect]}
       />
     )
   }
@@ -374,7 +438,16 @@ export function PropertiesPanel() {
           {tagRenameError && <p className="field-error">{tagRenameError}</p>}
 
           <label className="field">
-            <span>Volume</span>
+            <span>
+              Volume
+              <InfoIcon
+                text={
+                  volumeSiblings.length > 1
+                    ? `Shared with ${volumeSiblings.length - 1} other connected pipe${volumeSiblings.length - 1 === 1 ? '' : 's'} (no valve/component in between) — gas fills this whole run at once, so they all share one "_indicator" id.`
+                    : 'Not connected to any other pipe right now (a component, e.g. a valve, sits between it and everything else) — its own one-pipe volume.'
+                }
+              />
+            </span>
             <input
               value={volumeTagInput}
               onChange={(e) => {
@@ -383,16 +456,21 @@ export function PropertiesPanel() {
               }}
             />
           </label>
-          <p className="field-hint">
-            {volumeSiblings.length > 1
-              ? `Shared with ${volumeSiblings.length - 1} other connected pipe${volumeSiblings.length - 1 === 1 ? '' : 's'} (no valve/component in between) — gas fills this whole run at once, so they all share one "_indicator" id.`
-              : 'Not connected to any other pipe right now (a component, e.g. a valve, sits between it and everything else) — its own one-pipe volume.'}
-          </p>
         </fieldset>
 
         <fieldset className="field roles-field">
           <legend>Indicator &amp; color</legend>
-          <label className="role-checkbox">
+          <label
+            className="role-checkbox"
+            title={
+              (pipe.indicatorEnabled
+                ? `Exports as ${resolveIndicatorTag(pipe)}_indicator — a small dot at each connected segment's own midpoint, all sharing that id, so coloring it in Node-RED lights up the whole connected run at once.`
+                : "Currently just a decorative line — Node-RED can't target it.") +
+              (volumeSiblings.length > 1
+                ? ` Toggling this applies to all ${volumeSiblings.length} pipes in this connected run, not just this segment.`
+                : '')
+            }
+          >
             <input
               type="checkbox"
               checked={pipe.indicatorEnabled}
@@ -400,36 +478,30 @@ export function PropertiesPanel() {
             />
             clickable / colorable (_indicator)
           </label>
-          <p className="field-hint">
-            {pipe.indicatorEnabled ? (
-              <>
-                Exports as <code>{resolveIndicatorTag(pipe)}_indicator</code> — a small dot at each
-                connected segment&apos;s own midpoint, all sharing that id, so coloring it in Node-RED
-                lights up the whole connected run at once.
-              </>
-            ) : (
-              "Currently just a decorative line — Node-RED can't target it."
-            )}{' '}
-            {volumeSiblings.length > 1
-              ? `Toggling this applies to all ${volumeSiblings.length} pipes in this connected run, not just this segment.`
-              : null}
-          </p>
 
           <ColorPickerRow
             label="Line"
             value={pipe.strokeColor}
             defaultValue={pipe.indicatorEnabled ? PIPE_DEFAULT_COLOR : PIPE_NON_CLICKABLE_COLOR}
             onChange={(v) => setPipeColor(pipe.instanceId, v)}
+            hint={
+              pipe.strokeColor
+                ? `Custom color${volumeSiblings.length > 1 ? ' — applies to the whole connected run' : ''} overrides the default.`
+                : pipe.indicatorEnabled
+                  ? 'Default: black (indicator enabled).'
+                  : 'Default: light gray (no indicator, purely decorative).'
+            }
           />
-          <p className="field-hint">
-            {pipe.strokeColor
-              ? `Custom color${volumeSiblings.length > 1 ? ' — applies to the whole connected run' : ''} overrides the default.`
-              : pipe.indicatorEnabled
-                ? 'Default: black (indicator enabled).'
-                : 'Default: light gray (no indicator, purely decorative).'}
-          </p>
 
-          <label className="role-checkbox">
+          <label
+            className="role-checkbox"
+            title={
+              `Bare text showing ${resolveIndicatorTag(pipe)} — the volume tag, same as the indicator.` +
+              (volumeSiblings.length > 1
+                ? ` This run has ${volumeSiblings.length} connected segments; toggling this applies to all of them, but only one shows the label (at whichever segment has the most waypoints) instead of one per segment.`
+                : " Shown at this pipe's midpoint.")
+            }
+          >
             <input
               type="checkbox"
               checked={pipe.nameEnabled}
@@ -437,12 +509,6 @@ export function PropertiesPanel() {
             />
             show name label (_name)
           </label>
-          <p className="field-hint">
-            Bare text showing <code>{resolveIndicatorTag(pipe)}</code> — the volume tag, same as above.
-            {volumeSiblings.length > 1
-              ? ` This run has ${volumeSiblings.length} connected segments; toggling this applies to all of them, but only one shows the label (at whichever segment has the most waypoints) instead of one per segment.`
-              : " Shown at this pipe's midpoint."}
-          </p>
         </fieldset>
 
         {(() => {
@@ -464,7 +530,10 @@ export function PropertiesPanel() {
           return (
             <fieldset className="field roles-field">
               <legend>Arrow at this point</legend>
-              <label className="role-checkbox">
+              <label
+                className="role-checkbox"
+                title="Purely decorative — never read by Node-RED, just a visual direction cue."
+              >
                 <input
                   type="checkbox"
                   checked={!!arrow}
@@ -512,63 +581,56 @@ export function PropertiesPanel() {
                   </label>
                 </div>
               )}
-              <p className="field-hint">Purely decorative — never read by Node-RED, just a visual direction cue.</p>
             </fieldset>
           )
         })()}
 
         <fieldset className="field roles-field">
           <legend>Routing</legend>
-          <label className="role-checkbox">
+          <label className="role-checkbox" title="Supports crossing hop-arcs">
             <input
               type="radio"
               name="routing-mode"
               checked={pipe.routingMode === 'straight' || pipe.routingMode === 'manual'}
               onChange={() => setPipeRoutingMode(pipe.instanceId, 'straight')}
             />
-            Straight (supports crossing hop-arcs)
+            Straight
           </label>
-          <label className="role-checkbox">
+          <label className="role-checkbox" title="Right-angle bends, supports hop-arcs">
             <input
               type="radio"
               name="routing-mode"
               checked={pipe.routingMode === 'orthogonal'}
               onChange={() => setPipeRoutingMode(pipe.instanceId, 'orthogonal')}
             />
-            Orthogonal (right-angle bends, supports hop-arcs)
+            Orthogonal
           </label>
-          <label className="role-checkbox">
+          <label className="role-checkbox" title="Smooth spline, no hop-arcs">
             <input
               type="radio"
               name="routing-mode"
               checked={pipe.routingMode === 'curved'}
               onChange={() => setPipeRoutingMode(pipe.instanceId, 'curved')}
             />
-            Curved (smooth spline, no hop-arcs)
+            Curved
           </label>
         </fieldset>
 
         <p className="field-hint">
-          Double-click anywhere on the line to add a new waypoint there. Drag a waypoint dot to
-          reshape the run (snaps to the grid and to nearby ports/pipe points), or nudge the selected
-          one with arrow keys — hold Shift while dragging to lock movement to horizontal/vertical
-          from the waypoint&apos;s start position. Select a waypoint and press Delete/Backspace to
-          remove just that one. The two square end handles are the pipe&apos;s actual connection
-          points — drag one onto another port/pipe point to reattach it there, or drop it on empty
-          space to disconnect that end (it stays put as a fixed point). To move the component an
-          end is attached to instead of the pipe, click/drag its body elsewhere or use its own
-          drag-handle rather than the exact port pixel. Deleting a connected component also leaves
-          the pipe in place with a fixed knot where it used to attach.
+          Canvas editing
+          <InfoIcon
+            text="Double-click anywhere on the line to add a new waypoint there. Drag a waypoint dot to reshape the run (snaps to the grid and to nearby ports/pipe points), or nudge the selected one with arrow keys — hold Shift while dragging to lock movement to horizontal/vertical from the waypoint's start position. Select a waypoint and press Delete/Backspace to remove just that one. The two square end handles are the pipe's actual connection points — drag one onto another port/pipe point to reattach it there, or drop it on empty space to disconnect that end (it stays put as a fixed point). To move the component an end is attached to instead of the pipe, click/drag its body elsewhere or use its own drag-handle rather than the exact port pixel. Deleting a connected component also leaves the pipe in place with a fixed knot where it used to attach."
+          />
         </p>
 
         <div className="field-row">
-          <button onClick={() => autoRoutePipe(pipe.instanceId)}>Auto-route (avoid components)</button>
+          <button
+            onClick={() => autoRoutePipe(pipe.instanceId)}
+            title="Replaces this pipe's waypoints with a grid path that steps around other components' bounding boxes, and switches routing to orthogonal. Starting point, not a constraint — drag waypoints afterward same as any other pipe."
+          >
+            Auto-route (avoid components)
+          </button>
         </div>
-        <p className="field-hint">
-          Replaces this pipe&apos;s waypoints with a grid path that steps around other components&apos;
-          bounding boxes, and switches routing to orthogonal. Starting point, not a constraint — drag
-          waypoints afterward same as any other pipe.
-        </p>
         {routeError && <p className="field-error">{routeError}</p>}
 
         {crossings.length > 0 && (
@@ -612,7 +674,7 @@ export function PropertiesPanel() {
             Delete
           </button>
         </div>
-        <p className="field-hint">Shortcuts: Delete/Backspace to remove, Escape to deselect.</p>
+        <ShortcutHint items={[SHORTCUT.deleteOne, SHORTCUT.deselect]} />
       </aside>
     )
   }
@@ -631,16 +693,16 @@ export function PropertiesPanel() {
 
     return (
       <aside className="properties-panel">
-        <h2>Shape properties</h2>
-        <p className="field-hint">
-          Purely a visual annotation — untagged, so Node-RED never reads or targets it.
-        </p>
+        <h2 title="Purely a visual annotation — untagged, so Node-RED never reads or targets it.">Shape properties</h2>
 
         {shape.kind === 'text' && (
           <fieldset className="field roles-field">
             <legend>Text</legend>
             <label className="field">
-              <span>Content</span>
+              <span>
+                Content
+                <InfoIcon text="Press Enter for a line break — multi-line text is fully supported." />
+              </span>
               <textarea
                 rows={3}
                 value={shapeTextInput}
@@ -650,7 +712,6 @@ export function PropertiesPanel() {
                 }}
               />
             </label>
-            <p className="field-hint">Press Enter for a line break — multi-line text is fully supported.</p>
             <div className="field-row">
               <label className="field">
                 <span>Font size</span>
@@ -734,7 +795,7 @@ export function PropertiesPanel() {
             Delete
           </button>
         </div>
-        <p className="field-hint">Shortcuts: Delete/Backspace to remove, Escape to deselect.</p>
+        <ShortcutHint items={[SHORTCUT.deleteOne, SHORTCUT.deselect]} />
       </aside>
     )
   }
@@ -742,13 +803,9 @@ export function PropertiesPanel() {
   if (selectedLeaderLines.length > 0) {
     return (
       <aside className="properties-panel">
-        <h2>{selectedLeaderLines.length === 1 ? 'Leader line selected' : `${selectedLeaderLines.length} leader lines selected`}</h2>
-        <p className="field-hint">
-          A freeform annotation pointer — purely visual, untagged, so Node-RED never reads or targets it.
-        </p>
-        <p className="field-hint">
-          Drag its end point (or an interior waypoint) on the canvas to reposition it — no grid snapping.
-        </p>
+        <h2 title="A freeform annotation pointer — purely visual, untagged, so Node-RED never reads or targets it. Drag its end point (or an interior waypoint) on the canvas to reposition it — no grid snapping.">
+          {selectedLeaderLines.length === 1 ? 'Leader line selected' : `${selectedLeaderLines.length} leader lines selected`}
+        </h2>
         <div className="field-row">
           <button
             className="danger"
@@ -757,7 +814,7 @@ export function PropertiesPanel() {
             {selectedLeaderLines.length === 1 ? 'Delete' : 'Delete all'}
           </button>
         </div>
-        <p className="field-hint">Shortcuts: Delete/Backspace to remove, Escape to deselect.</p>
+        <ShortcutHint items={[SHORTCUT.deleteOne, SHORTCUT.deselect]} />
       </aside>
     )
   }
@@ -802,7 +859,14 @@ export function PropertiesPanel() {
 
         <fieldset className="field roles-field">
           <legend>Display</legend>
-          <label className="role-checkbox">
+          <label
+            className="role-checkbox"
+            title={
+              layer.locked
+                ? "Dragging on the canvas is disabled while locked — untick this to reposition it there, or just edit X/Y/Width/Height below."
+                : 'Drag the image on the canvas to move it (Shift locks to horizontal/vertical).'
+            }
+          >
             <input
               type="checkbox"
               checked={layer.locked}
@@ -810,11 +874,6 @@ export function PropertiesPanel() {
             />
             locked
           </label>
-          <p className="field-hint">
-            {layer.locked
-              ? "Dragging on the canvas is disabled while locked — untick this to reposition it there, or just edit X/Y/Width/Height below."
-              : 'Drag the image on the canvas to move it (Shift locks to horizontal/vertical).'}
-          </p>
 
           <label className="role-checkbox">
             <input
@@ -841,7 +900,10 @@ export function PropertiesPanel() {
 
         <fieldset className="field roles-field">
           <legend>Geometry</legend>
-          <label className="role-checkbox">
+          <label
+            className="role-checkbox"
+            title="Also applies to the corner drag-handles on the canvas — hold Shift while dragging one to temporarily flip this lock."
+          >
             <input
               type="checkbox"
               checked={imageAspectLocked}
@@ -849,10 +911,6 @@ export function PropertiesPanel() {
             />
             lock aspect ratio
           </label>
-          <p className="field-hint">
-            Also applies to the corner drag-handles on the canvas — hold Shift while dragging one to
-            temporarily flip this lock.
-          </p>
 
           <div className="layer-rect-grid">
             <label className="field">
@@ -935,20 +993,20 @@ export function PropertiesPanel() {
           ))}
         </fieldset>
         <div className="field-row">
-          <button onClick={() => setTool('place-connection-point', layer.layerId)}>Add connection point</button>
+          <button
+            onClick={() => setTool('place-connection-point', layer.layerId)}
+            title="Click, then click a spot on the image — pipes can snap to it afterwards, and it stays put on the image (as a % of its width/height) through later drags/resizes. Shift while clicking keeps adding several in a row."
+          >
+            Add connection point
+          </button>
         </div>
-        <p className="field-hint">
-          Click &quot;Add connection point&quot;, then click a spot on the image — pipes can snap
-          to it afterwards, and it stays put on the image (as a % of its width/height) through
-          later drags/resizes. Shift while clicking keeps adding several in a row.
-        </p>
 
         <div className="field-row">
           <button className="danger" onClick={() => deleteLayer(layer.layerId)}>
             Delete layer
           </button>
         </div>
-        <p className="field-hint">Shortcuts: Delete/Backspace to remove, Escape to deselect.</p>
+        <ShortcutHint items={[SHORTCUT.deleteOne, SHORTCUT.deselect]} />
       </aside>
     )
   }
@@ -1027,12 +1085,20 @@ export function PropertiesPanel() {
       <aside className="properties-panel">
         <p className="properties-empty">Select an instance or pipe to edit its properties.</p>
         <p className="field-hint">
-          Drag on empty canvas to box-select. Ctrl/Cmd+click toggles one instance, Ctrl/Cmd+drag
-          adds to the selection, Ctrl/Cmd+A selects all. Shift+drag on empty canvas pans; Shift
-          while dragging an instance, label, or waypoint locks movement to horizontal/vertical.
-          Shift while placing/drawing keeps the tool active for placing/drawing several in a row.
-          Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y to redo.
+          Drag on empty canvas to box-select. <kbd className="shortcut-badge">Ctrl/Cmd+click</kbd>{' '}
+          toggles one instance, <kbd className="shortcut-badge">Ctrl/Cmd+drag</kbd> adds to the
+          selection. <kbd className="shortcut-badge">Shift+drag</kbd> on empty canvas pans;{' '}
+          <kbd className="shortcut-badge">Shift</kbd> while dragging an instance, label, or
+          waypoint locks movement to horizontal/vertical. <kbd className="shortcut-badge">Shift</kbd>{' '}
+          while placing/drawing keeps the tool active for placing/drawing several in a row.
         </p>
+        <LabeledShortcutHint
+          items={[
+            { ...SHORTCUT.selectAll, word: 'select all' },
+            { ...SHORTCUT.undo, word: 'undo' },
+            { ...SHORTCUT.redo, word: 'redo' },
+          ]}
+        />
       </aside>
     )
   }
@@ -1091,7 +1157,12 @@ export function PropertiesPanel() {
       </fieldset>
 
       <fieldset className="field roles-field">
-        <legend>Roles</legend>
+        <legend>
+          Roles
+          <InfoIcon
+            text={`Exports as ${instance.tag}_<role> for each enabled role. Click a box/label on the canvas to select it individually (orange outline) — drag it, or nudge it with arrow keys (Shift for bigger steps) for fine placement.`}
+          />
+        </legend>
         {instance.roles.map((role) => (
           <label key={role.role} className="role-checkbox">
             <input
@@ -1102,11 +1173,6 @@ export function PropertiesPanel() {
             {role.role}
           </label>
         ))}
-        <p className="field-hint">
-          Exports as <code>{instance.tag}_&lt;role&gt;</code> for each enabled role. Click a
-          box/label on the canvas to select it individually (orange outline) — drag it, or nudge it
-          with arrow keys (Shift for bigger steps) for fine placement.
-        </p>
       </fieldset>
 
       {instance.roles
@@ -1274,10 +1340,7 @@ export function PropertiesPanel() {
           Delete
         </button>
       </div>
-      <p className="field-hint">
-        Shortcuts: arrow keys to move (Shift for bigger steps), R to rotate, Delete/Backspace to
-        remove, Escape to deselect.
-      </p>
+      <ShortcutHint items={[SHORTCUT.move, SHORTCUT.rotate, SHORTCUT.deleteOne, SHORTCUT.deselect]} />
     </aside>
   )
 }
