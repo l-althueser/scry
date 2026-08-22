@@ -130,17 +130,48 @@ export interface LeaderLineEndpointRef {
   role: Suffix
 }
 
-export type LeaderLineEndpoint = LeaderLineEndpointRef | { x: number; y: number }
+export type LeaderLineBorderTargetKind = 'shape' | 'pipe' | 'roleBox'
+
+/**
+ * Anchors to a live point on a target's current perimeter/polyline — a
+ * shape's border (rect/polygon/line's own outline; ellipse approximated by
+ * its bounding box; text is never a target here), a pipe's
+ * from->waypoints->to polyline, or a role's label box (name/value/setpoint —
+ * always a fixed-size rect in the role's local space, rotated by the
+ * instance+role rotation, even for `name`, which usually renders as bare
+ * text with no visible box: the box still exists as an invisible snap
+ * target at the same footprint. `indicator` has no generic box — it's a
+ * status overlay shaped like the component's own icon — so it's never a
+ * 'roleBox' target; see LeaderLineEndpointRef instead, which anchors to a
+ * role's plain center point). `segmentIndex` is which edge of the target's
+ * current point list, `t` in [0,1] is how far along that edge — resolved
+ * against the target's live geometry every render (see
+ * resolveLeaderLineEndpoint in leaderLineGeometry.ts), so the anchor moves,
+ * resizes, and rotates with its target instead of freezing at the position
+ * it was dropped.
+ */
+export interface LeaderLineBorderRef {
+  targetKind: LeaderLineBorderTargetKind
+  targetId: string
+  /** Only set when targetKind === 'roleBox'. */
+  role?: Suffix
+  segmentIndex: number
+  t: number
+}
+
+export type LeaderLineEndpoint = LeaderLineEndpointRef | LeaderLineBorderRef | { x: number; y: number }
 
 /**
  * Freeform annotation line (e.g. pointing from a _value label to a precise
  * spot on a background image). Deliberately separate from PipeInstance:
- * no grid/port snapping.
+ * no grid/port snapping. Both `from` and `to` share the same
+ * LeaderLineEndpoint union — either can be a bare point, a role-center
+ * anchor, or a live border anchor.
  */
 export interface LeaderLine {
   instanceId: string
   from: LeaderLineEndpoint
-  to: { x: number; y: number }
+  to: LeaderLineEndpoint
   waypoints: { x: number; y: number }[]
 }
 

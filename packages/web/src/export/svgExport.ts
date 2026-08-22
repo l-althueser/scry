@@ -93,7 +93,7 @@ export function exportProjectToSvg(
 
   // Leader lines render last of all — annotation pointers meant to sit above everything, including free shapes.
   for (const line of leaderLines) {
-    lines.push(...exportLeaderLine(line, instances))
+    lines.push(...exportLeaderLine(line, instances, pipes, freeShapes, layers))
   }
 
   lines.push(`  </g>`)
@@ -181,7 +181,7 @@ function computeBounds(
   }
 
   for (const line of leaderLines) {
-    const points = getLeaderLinePoints(line, instances)
+    const points = getLeaderLinePoints(line, instances, pipes, freeShapes, layers)
     if (!points) continue
     for (const p of points) {
       minX = Math.min(minX, p.x)

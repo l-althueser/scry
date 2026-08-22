@@ -112,8 +112,11 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   useEffect(() => {
     canvasRef.current?.syncInstances(instances)
     canvasRef.current?.syncPipes(pipes, instances)
-    canvasRef.current?.syncLeaderLines(leaderLines, instances)
-  }, [instances, pipes, leaderLines])
+    // Leader-line endpoints can now anchor to a pipe's or shape's border
+    // (not just a role label), so this must also re-run whenever pipes or
+    // freeShapes change, not just leaderLines/instances.
+    canvasRef.current?.syncLeaderLines(leaderLines, instances, pipes, freeShapes)
+  }, [instances, pipes, leaderLines, freeShapes])
 
   useEffect(() => {
     canvasRef.current?.syncFreeShapes(freeShapes)

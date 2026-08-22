@@ -9,6 +9,7 @@ import type {
   ImageLayer,
   Layer,
   LeaderLine,
+  LeaderLineBorderRef,
   LeaderLineEndpoint,
   PipeInstance,
   PortRef,
@@ -19,7 +20,7 @@ import { isPortRef } from '@svg-editor/shared'
 import {
   getLeaderLinePoints,
   leaderLinePathD,
-  resolveLeaderLineFromPosition,
+  resolveLeaderLineEndpoint,
 } from '../leaderLines/leaderLineGeometry'
 import {
   configurePlaceholderRoles,
@@ -27,8 +28,10 @@ import {
   getComponentTypeVersion,
   resolveLocalBodyCorners,
   resolvePorts,
+  roleBoxCorners,
   rotatePoint,
 } from '../library'
+import { nearestPointOnPolylineIndexed } from '../geometry/polyline'
 import {
   computeHopsForPipe,
   curvedPathD,
@@ -50,6 +53,7 @@ import {
   TEXT_LINE_HEIGHT,
   ellipseAttrs,
   nearestPointOnShapeBorder,
+  nearestPointOnShapeBorderIndexed,
   pointsAttr,
   rectAttrs,
   splitTextLines,
@@ -161,10 +165,10 @@ export interface SvgCanvasCallbacks {
   onConnectionPointAdded: (layerId: string, relX: number, relY: number, keepPlacing: boolean) => void
 
   /** keepDrawing is true when Shift was held, so the tool stays active for drawing several leader lines in a row. */
-  onLeaderLineAdded: (from: LeaderLineEndpoint, waypoints: Point[], to: Point, keepDrawing: boolean) => void
+  onLeaderLineAdded: (from: LeaderLineEndpoint, waypoints: Point[], to: LeaderLineEndpoint, keepDrawing: boolean) => void
   onLeaderLineSelectionChanged: (leaderLineIds: string[]) => void
   /** No grid/align snapping — leader lines are deliberately freeform annotations, unlike pipes/waypoints. */
-  onLeaderLinePointMoved: (leaderLineId: string, point: 'to' | number, worldPoint: Point) => void
+  onLeaderLinePointMoved: (leaderLineId: string, point: 'to' | number, worldPoint: LeaderLineEndpoint) => void
   /** `from` is a role ref when the drag lands on a label, otherwise a plain point (possibly docked to a shape border). */
   onLeaderLineFromMoved: (leaderLineId: string, from: LeaderLineEndpoint) => void
 }
@@ -805,13 +809,86 @@ export class SvgCanvas {
   }
 
   /**
-   * Resolves a raw click/drag point for a leader-line `to`/waypoint/free
-   * `from` into where it should actually land: snapped onto a shape's
-   * border if the cursor is close enough to one, otherwise the raw point
-   * as-is. Never grid-snapped — leader lines stay deliberately freeform.
+   * Resolves a raw click/drag point for a leader-line waypoint into where it
+   * should actually land: snapped onto a shape's border if the cursor is
+   * close enough to one, otherwise the raw point as-is. Never grid-snapped —
+   * leader lines stay deliberately freeform. Waypoints only ever get this
+   * simpler shape-only snap; see findLeaderLineEndpointAnchor for the wider
+   * search (shapes + pipes + role boxes) used by `from`/`to`.
    */
   private resolveLeaderLineAnchor(worldPt: Point): Point {
     return this.findShapeAnchorNear(worldPt) ?? worldPt
+  }
+
+  /**
+   * Nearest "stickable" border within snap range across every target a
+   * leader-line endpoint can anchor to live: a shape's outline (rect/
+   * polygon/line/ellipse-as-bbox; text has none), a pipe's polyline, or a
+   * value/setpoint role's label box (name/indicator have no box — see
+   * roleBoxCorners). Closest candidate wins across all three categories,
+   * same "closest wins" rule findPortNear already uses for pipe-port
+   * snapping. Returns a LeaderLineBorderRef (not yet a resolved position —
+   * the caller already has worldPt for live preview) or null if nothing is
+   * within PORT_SNAP_RADIUS.
+   */
+  private findLeaderLineBorderAnchorNear(worldPt: Point): LeaderLineBorderRef | null {
+    let best: { ref: LeaderLineBorderRef; dist: number } | null = null
+
+    for (const shape of this.latestShapes) {
+      const hit = nearestPointOnShapeBorderIndexed(shape, worldPt)
+      if (hit && hit.dist <= PORT_SNAP_RADIUS && (!best || hit.dist < best.dist)) {
+        best = {
+          ref: { targetKind: 'shape', targetId: shape.instanceId, segmentIndex: hit.segmentIndex, t: hit.t },
+          dist: hit.dist,
+        }
+      }
+    }
+
+    for (const pipe of this.latestPipes) {
+      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      if (!points) continue
+      const hit = nearestPointOnPolylineIndexed(points, worldPt)
+      if (hit && hit.dist <= PORT_SNAP_RADIUS && (!best || hit.dist < best.dist)) {
+        best = {
+          ref: { targetKind: 'pipe', targetId: pipe.instanceId, segmentIndex: hit.segmentIndex, t: hit.t },
+          dist: hit.dist,
+        }
+      }
+    }
+
+    for (const inst of this.latestInstances) {
+      for (const role of inst.roles) {
+        if (!role.enabled) continue
+        const corners = roleBoxCorners(inst, role)
+        if (!corners) continue
+        const hit = nearestPointOnPolylineIndexed(corners, worldPt)
+        if (hit && hit.dist <= PORT_SNAP_RADIUS && (!best || hit.dist < best.dist)) {
+          best = {
+            ref: {
+              targetKind: 'roleBox',
+              targetId: inst.instanceId,
+              role: role.role,
+              segmentIndex: hit.segmentIndex,
+              t: hit.t,
+            },
+            dist: hit.dist,
+          }
+        }
+      }
+    }
+
+    return best?.ref ?? null
+  }
+
+  /**
+   * Resolves a raw click/drag point for a leader-line `from`/`to` endpoint
+   * into the richer LeaderLineEndpoint it should actually become: a live
+   * border anchor if the cursor is close enough to one (see
+   * findLeaderLineBorderAnchorNear), otherwise the raw point as-is. Never
+   * grid-snapped, same as resolveLeaderLineAnchor.
+   */
+  private resolveLeaderLineEndpointAnchor(worldPt: Point): LeaderLineEndpoint {
+    return this.findLeaderLineBorderAnchorNear(worldPt) ?? worldPt
   }
 
   /**
@@ -1007,11 +1084,15 @@ export class SvgCanvas {
       this.clearLeaderLineDraft()
       return
     }
-    const last = draft.waypoints[draft.waypoints.length - 1]
+    // The last waypoint was only ever shape-border-snapped as it was placed
+    // (see resolveLeaderLineAnchor); re-resolving that same world position
+    // through the wider endpoint search picks up a pipe/role-box anchor too
+    // if one's there, now that it's becoming `to` rather than an interior bend.
+    const to = this.resolveLeaderLineEndpointAnchor(draft.waypoints[draft.waypoints.length - 1])
     const waypoints = draft.waypoints.slice(0, -1)
     const from = draft.from
     this.clearLeaderLineDraft()
-    this.callbacks.onLeaderLineAdded(from, waypoints, last, false)
+    this.callbacks.onLeaderLineAdded(from, waypoints, to, false)
   }
 
   /**
@@ -1033,9 +1114,12 @@ export class SvgCanvas {
       // ran through onPointerDown's normal add-waypoint path (since it no
       // longer short-circuits on evt.detail) — including shape-border
       // snapping — so the most recently added waypoint is really this same
-      // finishing click, already resolved; use it as `to` instead of
-      // leaving it as a redundant trailing waypoint or re-resolving it.
-      const to = draft.waypoints[draft.waypoints.length - 1]
+      // finishing click, already at the right world position; re-resolve it
+      // through the wider endpoint search (same reasoning as
+      // finishOrClearLeaderLineDraft) so it can pick up a pipe/role-box
+      // anchor now that it's becoming `to`, not just the shape-border point
+      // it was snapped to as an interior waypoint.
+      const to = this.resolveLeaderLineEndpointAnchor(draft.waypoints[draft.waypoints.length - 1])
       const waypoints = draft.waypoints.slice(0, -1)
       const from = draft.from
       this.clearLeaderLineDraft()
@@ -1180,19 +1264,22 @@ export class SvgCanvas {
     }
 
     if (this.tool === 'draw-leader-line') {
-      // Click to start: snaps to a role label if the click landed on one
-      // (the "anchored from a label" case), else docks onto a nearby
-      // shape's border/line if there is one, else a raw free point. Every
-      // point after that — waypoints and the final `to` — resolves the same
-      // way minus the role case (only `from` can live-track a label);
-      // leader lines never grid/align-snap.
+      // Click to start: snaps to a role label if the click landed exactly on
+      // one (the "anchored from a label" case), else docks onto the nearest
+      // shape/pipe/label-box border within range (see
+      // findLeaderLineBorderAnchorNear), else a raw free point. Interior
+      // waypoints resolve more simply (shape-border snap only, see
+      // resolveLeaderLineAnchor) — only the endpoints (`from`/the eventual
+      // `to`) get the wider anchor search; leader lines never grid/
+      // align-snap either way.
       if (!this.leaderLineDraft) {
         const roleHit = this.resolveRoleRefAt(evt.target as Element)
         if (roleHit) {
           this.leaderLineDraft = { from: roleHit.ref, fromPos: roleHit.pos, waypoints: [] }
         } else {
-          const pos = this.resolveLeaderLineAnchor(world)
-          this.leaderLineDraft = { from: pos, fromPos: pos, waypoints: [] }
+          const anchor = this.resolveLeaderLineEndpointAnchor(world)
+          const pos = resolveLeaderLineEndpoint(anchor, this.latestInstances, this.latestPipes, this.latestShapes, this.latestLayers) ?? world
+          this.leaderLineDraft = { from: anchor, fromPos: pos, waypoints: [] }
         }
         return
       }
@@ -1561,25 +1648,34 @@ export class SvgCanvas {
 
     if (this.tool === 'draw-leader-line' && this.leaderLineDraft) {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
-      this.updateLeaderLineDraftPreview(this.resolveLeaderLineAnchor(world))
+      const anchor = this.resolveLeaderLineEndpointAnchor(world)
+      const previewPos =
+        resolveLeaderLineEndpoint(anchor, this.latestInstances, this.latestPipes, this.latestShapes, this.latestLayers) ?? world
+      this.updateLeaderLineDraftPreview(previewPos)
       return
     }
 
     if (this.dragMode === 'move-leader-line-point' && this.dragLeaderLineId !== null && this.dragLeaderLinePoint !== null) {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
       if (this.dragLeaderLinePoint === 'from') {
-        // `from` re-anchors onto a different role label if the drag lands on
-        // one (elementFromPoint, not evt.target — pointer capture retargets
-        // evt.target to the svg root for the duration of this drag, same
-        // issue onDoubleClick's own doc comment describes), otherwise docks
-        // onto a nearby shape border, otherwise a raw free point.
+        // `from` re-anchors onto a different role label if the drag lands
+        // exactly on one (elementFromPoint, not evt.target — pointer capture
+        // retargets evt.target to the svg root for the duration of this
+        // drag, same issue onDoubleClick's own doc comment describes),
+        // otherwise the wider proximity search (shape/pipe/role-box border),
+        // otherwise a raw free point.
         const el = document.elementFromPoint(evt.clientX, evt.clientY)
         const roleHit = el ? this.resolveRoleRefAt(el) : null
-        const from = roleHit ? roleHit.ref : this.resolveLeaderLineAnchor(world)
+        const from = roleHit ? roleHit.ref : this.resolveLeaderLineEndpointAnchor(world)
         this.callbacks.onLeaderLineFromMoved(this.dragLeaderLineId, from)
         return
       }
-      // `to`/waypoint: no grid/align snapping, but does dock onto a nearby shape border.
+      if (this.dragLeaderLinePoint === 'to') {
+        // No grid/align snapping, but does dock onto a nearby shape/pipe/role-box border.
+        this.callbacks.onLeaderLinePointMoved(this.dragLeaderLineId, 'to', this.resolveLeaderLineEndpointAnchor(world))
+        return
+      }
+      // Interior waypoint: shape-border snap only, same as before.
       this.callbacks.onLeaderLinePointMoved(this.dragLeaderLineId, this.dragLeaderLinePoint, this.resolveLeaderLineAnchor(world))
       return
     }
@@ -1911,7 +2007,7 @@ export class SvgCanvas {
     const matchedShapes = this.latestShapes.filter((shape) => shape.points.some(within)).map((s) => s.instanceId)
     const matchedLeaderLines = this.latestLeaderLines
       .filter((line) => {
-        const points = getLeaderLinePoints(line, this.latestInstances)
+        const points = getLeaderLinePoints(line, this.latestInstances, this.latestPipes, this.latestShapes, this.latestLayers)
         return points?.some(within) ?? false
       })
       .map((l) => l.instanceId)
@@ -2393,10 +2489,11 @@ export class SvgCanvas {
       c.setAttribute('data-leader-line-point', pointAttr)
       this.leaderLineHandlesGroup.appendChild(c)
     }
-    const fromPos = resolveLeaderLineFromPosition(line.from, this.latestInstances)
+    const fromPos = resolveLeaderLineEndpoint(line.from, this.latestInstances, this.latestPipes, this.latestShapes, this.latestLayers)
     if (fromPos) addHandle(fromPos, 'from')
     line.waypoints.forEach((wp, index) => addHandle(wp, String(index)))
-    addHandle(line.to, 'to')
+    const toPos = resolveLeaderLineEndpoint(line.to, this.latestInstances, this.latestPipes, this.latestShapes, this.latestLayers)
+    if (toPos) addHandle(toPos, 'to')
   }
 
   private setLayerSelectionFromUser(layerId: string | null) {
@@ -2875,11 +2972,15 @@ export class SvgCanvas {
   }
 
   /**
-   * Reconciles leader-line DOM. Must be re-run whenever instances change too
-   * (not just leader lines), since a role-anchored `from` tracks its owning
-   * instance's position — same reason syncPipes needs both.
+   * Reconciles leader-line DOM. Must be re-run whenever instances/pipes/
+   * freeShapes change too (not just leader lines themselves), since a
+   * role-, pipe-, or shape-anchored endpoint tracks its target's live
+   * position — same reason syncPipes needs instances. `layers` is read from
+   * `this.latestLayers` (kept fresh by syncLayers) rather than threaded
+   * through here, since only a pipe end anchored to an image connection
+   * point needs it, and that's an existing edge case, not new to this.
    */
-  syncLeaderLines(leaderLines: LeaderLine[], instances: ComponentInstance[]) {
+  syncLeaderLines(leaderLines: LeaderLine[], instances: ComponentInstance[], pipes: PipeInstance[], freeShapes: FreeShape[]) {
     this.latestLeaderLines = leaderLines
     const seen = new Set<string>()
 
@@ -2910,7 +3011,7 @@ export class SvgCanvas {
         group.appendChild(dot)
       }
 
-      const points = getLeaderLinePoints(line, instances)
+      const points = getLeaderLinePoints(line, instances, pipes, freeShapes, this.latestLayers)
       if (!points) {
         group.style.display = 'none'
         continue

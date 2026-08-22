@@ -67,6 +67,46 @@ export const LABEL_BOX_HEIGHT = 16
  */
 export const NAME_TEXT_BASELINE_Y = LABEL_BOX_HEIGHT / 2
 
+/**
+ * World-space corners of a role's label box (closed loop, last point repeats
+ * the first) — used to snap/track a leader-line endpoint onto a label's
+ * border (see LeaderLineBorderRef, leaderLineGeometry.ts). value/setpoint
+ * get a real box+text element for every component type
+ * (createLabelBoxElement); `name` renders as bare text with no visible box
+ * for most component types, but still gets the same LABEL_BOX_WIDTH/HEIGHT
+ * footprint here on purpose — an invisible-but-real snap target at the same
+ * size/position a box would occupy, rather than only the plain center point
+ * (LeaderLineEndpointRef) it had before this. `indicator` is a status
+ * overlay shaped like the component's own icon, not a generic rect, so it's
+ * the only role that returns null here. One known simplification: a few
+ * component types (e.g. process-indicator) rotate their whole group
+ * including labels, so this box's true on-screen orientation there also
+ * includes the instance's own rotation, not just the role's independent one
+ * — same center-point-only limitation resolveLeaderLineEndpoint already has
+ * for every type, not a new inaccuracy introduced here.
+ */
+export function roleBoxCorners(
+  instance: { transform: { x: number; y: number; rotationDeg: number } },
+  role: Pick<RoleInstance, 'role' | 'offset' | 'rotationDeg'>,
+): { x: number; y: number }[] | null {
+  if (role.role === 'indicator') return null
+  const anchor = rotatePoint(role.offset, instance.transform.rotationDeg)
+  const worldAnchor = { x: instance.transform.x + anchor.x, y: instance.transform.y + anchor.y }
+  const half = LABEL_BOX_WIDTH / 2
+  const localCorners = [
+    { x: -half, y: 0 },
+    { x: half, y: 0 },
+    { x: half, y: LABEL_BOX_HEIGHT },
+    { x: -half, y: LABEL_BOX_HEIGHT },
+  ]
+  const rot = role.rotationDeg ?? 0
+  const corners = localCorners.map((c) => {
+    const r = rotatePoint(c, rot)
+    return { x: worldAnchor.x + r.x, y: worldAnchor.y + r.y }
+  })
+  return [...corners, corners[0]]
+}
+
 /** Roles rendered as a filled box + text, styled after Templates.svg's IND000_value/IND000_setpoint. */
 export const BOX_ROLE_FILL: Partial<Record<string, string>> = {
   value: '#d8d8d8',

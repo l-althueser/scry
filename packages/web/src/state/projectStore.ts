@@ -13,6 +13,7 @@ import {
   type ImageLayer,
   type Layer,
   type LeaderLine,
+  type LeaderLineBorderRef,
   type LeaderLineEndpoint,
   type LeaderLineEndpointRef,
   type PipeInstance,
@@ -34,13 +35,12 @@ import { downloadTextFile } from '../export/downloadFile'
 import { computePipeVolumeGroups } from '../pipes/pipeVolumes'
 import {
   detachPipesFromInstances,
-  getPipePoints,
   IMAGE_POINT_PREFIX,
   PIPE_POINT_PREFIX,
   pipePointPortId,
   resolvePortRefWorldPosition,
 } from '../pipes/pipeGeometry'
-import { detachLeaderLinesFromInstances, resolveLeaderLineFromPosition } from '../leaderLines/leaderLineGeometry'
+import { detachLeaderLineEndpoints, resolveLeaderLineEndpoint } from '../leaderLines/leaderLineGeometry'
 import { computeAutoRoute } from '../routing/autoRoute'
 import { DEFAULT_FONT_SIZE, DEFAULT_SHAPE_STYLE } from '../shapes/freeShapeGeometry'
 
@@ -266,6 +266,23 @@ function isLeaderLineEndpointRef(ref: LeaderLineEndpoint): ref is LeaderLineEndp
   return 'instanceId' in ref
 }
 
+function isLeaderLineBorderRef(ref: LeaderLineEndpoint): ref is LeaderLineBorderRef {
+  return 'targetKind' in ref
+}
+
+/** Shifts a bare-point leader-line endpoint by `offset`; a role or border ref is left untouched (it tracks its target live, no coordinate of its own to shift) — used by cloneEntitySet's pass 1. */
+function offsetLeaderLineEndpoint(ep: LeaderLineEndpoint, offset: Point): LeaderLineEndpoint {
+  if (isLeaderLineEndpointRef(ep) || isLeaderLineBorderRef(ep)) return ep
+  return { x: ep.x + offset.x, y: ep.y + offset.y }
+}
+
+/** Rewrites a role/border ref's target id through idMap (falling back to the original id if absent — see cloneEntitySet pass 2's doc comment); a bare point is left untouched. */
+function remapLeaderLineEndpoint(ep: LeaderLineEndpoint, idMap: Map<string, string>): LeaderLineEndpoint {
+  if (isLeaderLineEndpointRef(ep)) return { ...ep, instanceId: idMap.get(ep.instanceId) ?? ep.instanceId }
+  if (isLeaderLineBorderRef(ep)) return { ...ep, targetId: idMap.get(ep.targetId) ?? ep.targetId }
+  return ep
+}
+
 /**
  * Mirrors createGroup's existing selection-reading pattern: filters the
  * project's four entity arrays down to the four selected-id arrays, plus
@@ -278,7 +295,7 @@ function isLeaderLineEndpointRef(ref: LeaderLineEndpoint): ref is LeaderLineEndp
  * or another pipe NOT included in this gathered set is frozen into an open
  * (FreePoint) end at its current world position — a clone/paste must never
  * keep pointing at something the user didn't actually select, mirroring how
- * detachPipesFromInstances/detachLeaderLinesFromInstances already freeze an
+ * detachPipesFromInstances/detachLeaderLineEndpoints already freeze an
  * end at its last known position when the instance it pointed at is
  * deleted. A reference to an image layer's connection point is left alone:
  * layers aren't duplicated by this feature, so the same shared background
@@ -329,12 +346,24 @@ function gatherSelectionAsEntitySet(
       return fromPort === p.fromPort && toPort === p.toPort ? p : { ...p, fromPort, toPort }
     })
 
+  const openLeaderLineEndIfExternal = (ep: LeaderLineEndpoint): LeaderLineEndpoint => {
+    const referencesUngathered = isLeaderLineEndpointRef(ep)
+      ? !instanceIds.has(ep.instanceId)
+      : isLeaderLineBorderRef(ep)
+        ? (ep.targetKind === 'roleBox' && !instanceIds.has(ep.targetId)) ||
+          (ep.targetKind === 'pipe' && !pipeIds.has(ep.targetId)) ||
+          (ep.targetKind === 'shape' && !shapeIds.has(ep.targetId))
+        : false
+    if (!referencesUngathered) return ep
+    return resolveLeaderLineEndpoint(ep, state.instances, state.pipes, state.freeShapes, state.layers) ?? ep
+  }
+
   const leaderLines = state.leaderLines
     .filter((l) => leaderLineIds.has(l.instanceId))
     .map((l) => {
-      if (!isLeaderLineEndpointRef(l.from) || instanceIds.has(l.from.instanceId)) return l
-      const pos = resolveLeaderLineFromPosition(l.from, state.instances)
-      return pos ? { ...l, from: pos } : l
+      const from = openLeaderLineEndIfExternal(l.from)
+      const to = openLeaderLineEndIfExternal(l.to)
+      return from === l.from && to === l.to ? l : { ...l, from, to }
     })
 
   return {
@@ -408,8 +437,8 @@ function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipbo
     return {
       ...line,
       instanceId,
-      from: isLeaderLineEndpointRef(line.from) ? line.from : { x: line.from.x + offset.x, y: line.from.y + offset.y },
-      to: { x: line.to.x + offset.x, y: line.to.y + offset.y },
+      from: offsetLeaderLineEndpoint(line.from, offset),
+      to: offsetLeaderLineEndpoint(line.to, offset),
       waypoints: line.waypoints.map((wp) => ({ x: wp.x + offset.x, y: wp.y + offset.y })),
     }
   })
@@ -428,9 +457,8 @@ function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipbo
   }))
   const remappedLeaderLines = leaderLines.map((line) => ({
     ...line,
-    from: isLeaderLineEndpointRef(line.from)
-      ? { ...line.from, instanceId: idMap.get(line.from.instanceId) ?? line.from.instanceId }
-      : line.from,
+    from: remapLeaderLineEndpoint(line.from, idMap),
+    to: remapLeaderLineEndpoint(line.to, idMap),
   }))
   const remappedGroups = source.groups
     .map((g) => ({
@@ -490,7 +518,7 @@ function applyStyleFieldToIds(
  * its members is deleted via a path other than deleteGroup itself.
  */
 function computeMixedDeletion(
-  state: Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'groups'>,
+  state: Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'layers' | 'groups'>,
   ids: { instanceIds: Set<string>; pipeIds: Set<string>; shapeIds: Set<string>; leaderLineIds: Set<string> },
 ): Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'groups'> {
   return {
@@ -500,9 +528,11 @@ function computeMixedDeletion(
         (p) => !ids.pipeIds.has(p.instanceId),
       ),
     ),
-    leaderLines: detachLeaderLinesFromInstances(state.leaderLines, state.instances, ids.instanceIds).filter(
-      (l) => !ids.leaderLineIds.has(l.instanceId),
-    ),
+    leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
+      instanceIds: ids.instanceIds,
+      pipeIds: ids.pipeIds,
+      shapeIds: ids.shapeIds,
+    }).filter((l) => !ids.leaderLineIds.has(l.instanceId)),
     freeShapes: state.freeShapes.filter((s) => !ids.shapeIds.has(s.instanceId)),
     groups: stripDeletedGroupMembers(state.groups, {
       instance: ids.instanceIds,
@@ -742,10 +772,10 @@ interface ProjectState {
   selectShapes: (shapeIds: string[]) => void
 
   /** Adds a finished leader line from a completed draw-tool interaction (from/waypoints/to already resolved by the canvas). */
-  addLeaderLine: (from: LeaderLineEndpoint, waypoints: Point[], to: Point) => void
+  addLeaderLine: (from: LeaderLineEndpoint, waypoints: Point[], to: LeaderLineEndpoint) => void
   deleteLeaderLines: (leaderLineIds: string[]) => void
-  /** Continuous drag, like moveShape/moveInstance — checkpointed once at drag-start via onDragCheckpoint. Moves the 'to' endpoint or a waypoint by index. */
-  moveLeaderLinePoint: (leaderLineId: string, point: 'to' | number, pos: Point) => void
+  /** Continuous drag, like moveShape/moveInstance — checkpointed once at drag-start via onDragCheckpoint. Moves the 'to' endpoint (which may snap onto a role/border anchor, not just a bare point) or a waypoint by index (always a bare point). */
+  moveLeaderLinePoint: (leaderLineId: string, point: 'to' | number, pos: LeaderLineEndpoint) => void
   /** Same drag pattern as moveLeaderLinePoint, but for 'from' — its value is a full LeaderLineEndpoint (a role ref when the drag re-anchors onto a different label, otherwise a plain point). */
   moveLeaderLineFrom: (leaderLineId: string, from: LeaderLineEndpoint) => void
   selectLeaderLines: (leaderLineIds: string[]) => void
@@ -964,7 +994,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         // position instead of a dangling reference that would otherwise
         // silently stop rendering.
         pipes: recomputeVolumeTags(detachPipesFromInstances(state.pipes, state.instances, removed)),
-        leaderLines: detachLeaderLinesFromInstances(state.leaderLines, state.instances, removed),
+        leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
+          instanceIds: removed,
+        }),
         selectedInstanceIds: state.selectedInstanceIds.filter((id) => id !== instanceId),
         selectedRole: state.selectedRole?.instanceId === instanceId ? null : state.selectedRole,
         groups,
@@ -981,7 +1013,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...pushHistory(state),
         instances: state.instances.filter((inst) => !removed.has(inst.instanceId)),
         pipes: recomputeVolumeTags(detachPipesFromInstances(state.pipes, state.instances, removed)),
-        leaderLines: detachLeaderLinesFromInstances(state.leaderLines, state.instances, removed),
+        leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
+          instanceIds: removed,
+        }),
         selectedInstanceIds: state.selectedInstanceIds.filter((id) => !removed.has(id)),
         selectedRole:
           state.selectedRole && removed.has(state.selectedRole.instanceId) ? null : state.selectedRole,
@@ -1161,16 +1195,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }
       }
 
-      // Selected leader lines: every waypoint, the `to` endpoint, and `from`
-      // only when it's a bare point (a role-anchored `from` already tracks
-      // its label live, same reasoning as an attached pipe port above).
+      // Selected leader lines: every waypoint, plus `from`/`to` only when
+      // each is a bare point — a role- or border-anchored endpoint already
+      // tracks its target live (label, shape, or pipe), same reasoning as an
+      // attached pipe port above, so it's never delta-moved here.
       const leaderLinePointOrigins: { leaderLineId: string; point: 'from' | 'to' | number; origin: Point }[] = []
       for (const line of state.leaderLines) {
         if (!state.selectedLeaderLineIds.includes(line.instanceId)) continue
-        if (!('instanceId' in line.from)) {
+        if (!isLeaderLineEndpointRef(line.from) && !isLeaderLineBorderRef(line.from)) {
           leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: 'from', origin: { x: line.from.x, y: line.from.y } })
         }
-        leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: 'to', origin: { x: line.to.x, y: line.to.y } })
+        if (!isLeaderLineEndpointRef(line.to) && !isLeaderLineBorderRef(line.to)) {
+          leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: 'to', origin: { x: line.to.x, y: line.to.y } })
+        }
         line.waypoints.forEach((wp, idx) => {
           leaderLinePointOrigins.push({ leaderLineId: line.instanceId, point: idx, origin: { x: wp.x, y: wp.y } })
         })
@@ -1458,10 +1495,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   deletePipes: (pipeIds) =>
     set((state) => {
-      const groups = stripDeletedGroupMembers(state.groups, { pipe: new Set(pipeIds) })
+      const removed = new Set(pipeIds)
+      const groups = stripDeletedGroupMembers(state.groups, { pipe: removed })
       return {
         ...pushHistory(state),
         pipes: recomputeVolumeTags(state.pipes.filter((p) => !pipeIds.includes(p.instanceId))),
+        // A leader line anchored to one of these pipes' borders (see
+        // LeaderLineBorderRef) would otherwise silently stop resolving —
+        // freeze it at its last position instead, same "leave a knot"
+        // contract used everywhere else an anchor's target disappears.
+        leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
+          pipeIds: removed,
+        }),
         selectedPipeIds: state.selectedPipeIds.filter((id) => !pipeIds.includes(id)),
         selectedWaypoint:
           state.selectedWaypoint && pipeIds.includes(state.selectedWaypoint.pipeId)
@@ -1678,10 +1723,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   deleteShapes: (shapeIds) =>
     set((state) => {
-      const groups = stripDeletedGroupMembers(state.groups, { shape: new Set(shapeIds) })
+      const removed = new Set(shapeIds)
+      const groups = stripDeletedGroupMembers(state.groups, { shape: removed })
       return {
         ...pushHistory(state),
         freeShapes: state.freeShapes.filter((s) => !shapeIds.includes(s.instanceId)),
+        // Same "leave a knot instead of dangling" contract as deletePipes above.
+        leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
+          shapeIds: removed,
+        }),
         selectedShapeIds: state.selectedShapeIds.filter((id) => !shapeIds.includes(id)),
         groups,
         selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
@@ -1778,7 +1828,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       leaderLines: state.leaderLines.map((l) => {
         if (l.instanceId !== leaderLineId) return l
         if (point === 'to') return { ...l, to: pos }
-        return { ...l, waypoints: l.waypoints.map((wp, i) => (i === point ? pos : wp)) }
+        // Waypoints are always bare points — SvgCanvas only ever drags a
+        // waypoint to a raw world position, never onto a role/border anchor
+        // (only `from`/`to` can snap onto those), so this cast is safe.
+        const wpPos = pos as Point
+        return { ...l, waypoints: l.waypoints.map((wp, i) => (i === point ? wpPos : wp)) }
       }),
     })),
 

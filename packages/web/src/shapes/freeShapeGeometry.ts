@@ -1,4 +1,5 @@
 import type { FreeShape, FreeShapeStyle, TextAlign } from '@svg-editor/shared'
+import { nearestPointOnPolylineIndexed, pointAlongPolyline } from '../geometry/polyline'
 
 export interface Point {
   x: number
@@ -83,15 +84,18 @@ function nearestPointOnPolyline(p: Point, points: Point[]): Point {
 }
 
 /**
- * Closest point on a shape's own outline to `p` — rect/polygon use their
- * full closed perimeter, line its one segment. Used by the leader-line tool
- * to "dock" an endpoint precisely onto a shape's border/line instead of
- * wherever the cursor happened to land nearby (see SvgCanvas's
- * findShapeAnchorNear). Ellipse and text are deliberately not supported —
- * no straight border to dock onto in the same simple way.
+ * The point list a shape's border is walked as — rect/polygon as a full
+ * closed perimeter (last point repeats the first), line as its one open
+ * segment. Ellipse approximates its border with its bounding box's
+ * perimeter (not a true oval outline, but enough to dock a leader line onto
+ * "roughly the right side"). Text has no border. Exposed separately from
+ * nearestPointOnShapeBorder so a persisted LeaderLineBorderRef
+ * (segmentIndex/t) can be resolved back to a point later via
+ * pointAlongPolyline, walking the shape's CURRENT points — which is what
+ * makes the anchor track the shape through drags/resizes.
  */
-export function nearestPointOnShapeBorder(shape: FreeShape, p: Point): Point | null {
-  if (shape.kind === 'rect') {
+export function shapeBorderPoints(shape: FreeShape): Point[] | null {
+  if (shape.kind === 'rect' || shape.kind === 'ellipse') {
     const { x, y, width, height } = rectAttrs(shape.points)
     const corners = [
       { x, y },
@@ -99,13 +103,40 @@ export function nearestPointOnShapeBorder(shape: FreeShape, p: Point): Point | n
       { x: x + width, y: y + height },
       { x, y: y + height },
     ]
-    return nearestPointOnPolyline(p, [...corners, corners[0]])
+    return [...corners, corners[0]]
   }
-  if (shape.kind === 'line') {
-    return nearestPointOnSegment(p, shape.points[0], shape.points[1])
-  }
-  if (shape.kind === 'polygon') {
-    return nearestPointOnPolyline(p, [...shape.points, shape.points[0]])
-  }
+  if (shape.kind === 'line') return [shape.points[0], shape.points[1]]
+  if (shape.kind === 'polygon') return [...shape.points, shape.points[0]]
   return null
+}
+
+/**
+ * Closest point on a shape's own outline to `p` — used by the leader-line
+ * tool to "dock" an endpoint precisely onto a shape's border/line instead of
+ * wherever the cursor happened to land nearby (see SvgCanvas's
+ * findShapeAnchorNear). Text is deliberately not supported — no border to
+ * dock onto.
+ */
+export function nearestPointOnShapeBorder(shape: FreeShape, p: Point): Point | null {
+  const points = shapeBorderPoints(shape)
+  if (!points) return null
+  if (shape.kind === 'line') return nearestPointOnSegment(p, points[0], points[1])
+  return nearestPointOnPolyline(p, points)
+}
+
+/** Same search as nearestPointOnShapeBorder, but also returns which segment/t to persist as a LeaderLineBorderRef — see resolveShapeBorderPoint for the inverse. */
+export function nearestPointOnShapeBorderIndexed(
+  shape: FreeShape,
+  p: Point,
+): { point: Point; segmentIndex: number; t: number; dist: number } | null {
+  const points = shapeBorderPoints(shape)
+  if (!points) return null
+  return nearestPointOnPolylineIndexed(points, p)
+}
+
+/** Resolves a LeaderLineBorderRef's (segmentIndex, t) back to a live world point on `shape`'s current border — null if the shape's kind no longer has a border (e.g. changed) or the indices are out of range. */
+export function resolveShapeBorderPoint(shape: FreeShape, segmentIndex: number, t: number): Point | null {
+  const points = shapeBorderPoints(shape)
+  if (!points) return null
+  return pointAlongPolyline(points, segmentIndex, t)
 }
