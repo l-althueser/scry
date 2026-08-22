@@ -1402,24 +1402,32 @@ export class SvgCanvas {
         return
       }
 
-      // Also true for a single already-selected instance that has companion
-      // pipe knots from a box-select (see companionPipePoints) — re-running
-      // setSelectionFromUser here would wipe them right before they're read
-      // below, even though the instance itself doesn't need re-selecting.
+      // Also true for a single already-selected instance that's part of a
+      // larger mixed selection (any combination of instances/pipes/shapes/
+      // leader lines — not just 2+ instances) or has companion pipe knots
+      // from a box-select (see companionPipePoints) — re-running
+      // setSelectionFromUser here would wipe the rest of that selection
+      // right before it's read below, even though the instance itself
+      // doesn't need re-selecting.
       const partOfGroup =
         this.selectedInstanceIds.includes(instanceId) &&
-        (this.selectedInstanceIds.length > 1 || this.companionPipePoints.length > 0)
+        (this.totalSelectedCount() > 1 || this.companionPipePoints.length > 0)
 
       if (!partOfGroup) {
         this.setSelectionFromUser([instanceId])
       }
 
       // Also routes a *single* selected instance through the group-drag
-      // mechanism whenever it has companion pipe knots (see finalizeBoxSelect)
-      // — group-drag is delta-based (origin + delta), which is what lets
-      // those knots translate by the same amount the instance does; plain
-      // move-instance only ever reports an absolute new position.
-      if (this.selectedInstanceIds.length > 1 || this.companionPipePoints.length > 0) {
+      // mechanism whenever it's part of a larger mixed selection or has
+      // companion pipe knots (see finalizeBoxSelect) — group-drag is
+      // delta-based (origin + delta) and beginGroupDrag reads the live
+      // selectedPipeIds/selectedShapeIds/selectedLeaderLineIds directly from
+      // store state (not from the instanceIds passed in here), so this is
+      // what carries a selected pipe/shape/leader line along even when the
+      // drag started on an instance and only one instance is selected;
+      // plain move-instance only ever reports an absolute new position and
+      // touches nothing else.
+      if (partOfGroup) {
         this.dragMode = 'move-group'
         this.groupDragStartWorld = world
         this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
@@ -1464,7 +1472,20 @@ export class SvgCanvas {
         this.callbacks.onGroupDragStart(memberInstanceIds, [])
         return
       }
-      this.setShapeSelectionFromUser([shapeId])
+      // Same "already part of a larger mixed selection" carry-along as the
+      // instanceEl branch above — a selected shape being dragged alongside a
+      // selected leader line (or pipe) must not collapse down to just this
+      // shape.
+      const partOfGroup = this.selectedShapeIds.includes(shapeId) && this.totalSelectedCount() > 1
+      if (!partOfGroup) {
+        this.setShapeSelectionFromUser([shapeId])
+      }
+      if (partOfGroup) {
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
+        return
+      }
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-shape'
       this.dragShapeId = shapeId
@@ -1908,48 +1929,79 @@ export class SvgCanvas {
       return
     }
 
-    // Group expansion: a (non-additive) box that touches members of exactly
-    // one existing group selects that group as a whole (its full
-    // membership, not just whichever of its members happened to fall inside
-    // the box); touching members of more than one group at once falls back
-    // to a loose multi-select across just the raw matches below instead of
-    // trying to merge two groups' memberships together — an explicit v1
-    // simplification (see the grouping plan), not an oversight.
+    // Group expansion: a (non-additive) box that touches part of an existing
+    // group pulls in that group's full membership, not just whichever
+    // members happened to physically fall inside the box — and keeps
+    // whatever else the box also caught (free-standing elements, or another
+    // group) alongside it, rather than replacing the whole selection with
+    // just the touched group. Only collapses to a persisted selectedGroupId
+    // when the expanded result exactly equals one group's full membership
+    // (via membersMatchSelection, the same exact-match check
+    // toggleMemberInSelection uses for Ctrl/Cmd+click) — otherwise it's a
+    // loose multi-select spanning the expanded group(s) plus any extras.
+    let instancesForSelection = matchedInstances
+    let pipesForSelection = matchedPipes
+    let shapesForSelection = matchedShapes
+    let leaderLinesForSelection = matchedLeaderLines
+
     if (!this.boxSelectAdditive) {
-      const touchedGroupIds = new Set(
-        this.latestGroups
-          .filter((g) =>
-            g.members.some(
-              (m) =>
-                (m.kind === 'instance' && matchedInstances.includes(m.id)) ||
-                (m.kind === 'pipe' && matchedPipes.includes(m.id)) ||
-                (m.kind === 'shape' && matchedShapes.includes(m.id)) ||
-                (m.kind === 'leaderLine' && matchedLeaderLines.includes(m.id)),
-            ),
-          )
-          .map((g) => g.groupId),
+      const touchedGroups = this.latestGroups.filter((g) =>
+        g.members.some(
+          (m) =>
+            (m.kind === 'instance' && matchedInstances.includes(m.id)) ||
+            (m.kind === 'pipe' && matchedPipes.includes(m.id)) ||
+            (m.kind === 'shape' && matchedShapes.includes(m.id)) ||
+            (m.kind === 'leaderLine' && matchedLeaderLines.includes(m.id)),
+        ),
       )
-      if (touchedGroupIds.size === 1) {
-        this.companionPipePoints = []
-        this.refreshCompanionPipePointHandles()
-        this.callbacks.onGroupSelected([...touchedGroupIds][0])
-        if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
-        return
+      if (touchedGroups.length > 0) {
+        const expandedInstances = new Set(matchedInstances)
+        const expandedPipes = new Set(matchedPipes)
+        const expandedShapes = new Set(matchedShapes)
+        const expandedLeaderLines = new Set(matchedLeaderLines)
+        for (const group of touchedGroups) {
+          for (const m of group.members) {
+            if (m.kind === 'instance') expandedInstances.add(m.id)
+            else if (m.kind === 'pipe') expandedPipes.add(m.id)
+            else if (m.kind === 'shape') expandedShapes.add(m.id)
+            else expandedLeaderLines.add(m.id)
+          }
+        }
+        instancesForSelection = Array.from(expandedInstances)
+        pipesForSelection = Array.from(expandedPipes)
+        shapesForSelection = Array.from(expandedShapes)
+        leaderLinesForSelection = Array.from(expandedLeaderLines)
+
+        const exactGroup = this.latestGroups.find((g) =>
+          this.membersMatchSelection(g, {
+            instanceIds: instancesForSelection,
+            pipeIds: pipesForSelection,
+            shapeIds: shapesForSelection,
+            leaderLineIds: leaderLinesForSelection,
+          }),
+        )
+        if (exactGroup) {
+          this.companionPipePoints = []
+          this.refreshCompanionPipePointHandles()
+          this.callbacks.onGroupSelected(exactGroup.groupId)
+          if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
+          return
+        }
       }
     }
 
     const nextInstances = this.boxSelectAdditive
-      ? Array.from(new Set([...this.selectedInstanceIds, ...matchedInstances]))
-      : matchedInstances
+      ? Array.from(new Set([...this.selectedInstanceIds, ...instancesForSelection]))
+      : instancesForSelection
     const nextPipes = this.boxSelectAdditive
-      ? Array.from(new Set([...this.selectedPipeIds, ...matchedPipes]))
-      : matchedPipes
+      ? Array.from(new Set([...this.selectedPipeIds, ...pipesForSelection]))
+      : pipesForSelection
     const nextShapes = this.boxSelectAdditive
-      ? Array.from(new Set([...this.selectedShapeIds, ...matchedShapes]))
-      : matchedShapes
+      ? Array.from(new Set([...this.selectedShapeIds, ...shapesForSelection]))
+      : shapesForSelection
     const nextLeaderLines = this.boxSelectAdditive
-      ? Array.from(new Set([...this.selectedLeaderLineIds, ...matchedLeaderLines]))
-      : matchedLeaderLines
+      ? Array.from(new Set([...this.selectedLeaderLineIds, ...leaderLinesForSelection]))
+      : leaderLinesForSelection
 
     this.setMixedSelectionFromUser({
       instanceIds: nextInstances,
@@ -2082,6 +2134,16 @@ export class SvgCanvas {
     this.companionPipePoints = []
     this.refreshCompanionPipePointHandles()
     this.callbacks.onMixedSelectionChanged(selection)
+  }
+
+  /** Combined size of the current selection across all four kinds — used to decide whether dragging an already-selected instance/shape should carry the rest of a mixed selection along (group-drag) instead of collapsing to just the clicked item. */
+  private totalSelectedCount(): number {
+    return (
+      this.selectedInstanceIds.length +
+      this.selectedPipeIds.length +
+      this.selectedShapeIds.length +
+      this.selectedLeaderLineIds.length
+    )
   }
 
   /** Finds the group (if any) a given member kind/id belongs to — flat lookup, no recursion (Group.members is always leaf-kind, see the model). */
