@@ -203,6 +203,7 @@ function tryMergeOneFreeEndChain(
         waypoints,
         toPort,
         indicatorEnabled: anchor.indicatorEnabled || continuing.indicatorEnabled,
+        nameEnabled: anchor.nameEnabled || continuing.nameEnabled,
         strokeColor: anchor.strokeColor ?? continuing.strokeColor ?? null,
       }
       const nextPipes = pipes
@@ -519,6 +520,23 @@ function applyStyleFieldToIds(
 }
 
 /**
+ * Core of setGroupPipeFlag/setSelectionPipeFlag: applies a shared on/off
+ * toggle across every selected pipe at once — the bulk counterpart to
+ * setPipeIndicatorEnabled/setPipeNameEnabled for a multi-pipe selection.
+ * Non-pipe ids in the selection are silently unaffected (only pipes have
+ * these two flags), same "ignore kinds that don't have this field" pattern
+ * as applyStyleFieldToIds.
+ */
+function applyPipeFlagToIds(
+  pipes: PipeInstance[],
+  pipeIds: Set<string>,
+  field: 'indicatorEnabled' | 'nameEnabled',
+  value: boolean,
+): PipeInstance[] {
+  return pipes.map((p) => (pipeIds.has(p.instanceId) ? { ...p, [field]: value } : p))
+}
+
+/**
  * Core of deleteGroup/deleteSelection: removes the given ids from every
  * project array in one pass and strips them out of any Group.members list
  * that referenced them, so a group never accumulates stale ids when one of
@@ -747,6 +765,7 @@ interface ProjectState {
   renamePipeTag: (pipeId: string, newTag: string) => void
   renameVolumeTag: (pipeId: string, newTag: string) => void
   setPipeIndicatorEnabled: (pipeId: string, enabled: boolean) => void
+  setPipeNameEnabled: (pipeId: string, enabled: boolean) => void
   setPipeColor: (pipeId: string, color: string | null) => void
   setPipeRoutingMode: (pipeId: string, mode: RoutingMode) => void
   movePipeWaypoint: (pipeId: string, waypointIndex: number, pt: Point) => void
@@ -810,6 +829,10 @@ interface ProjectState {
   setGroupStyle: (groupId: string, field: 'fill' | 'stroke' | 'text', value: string | null) => void
   /** Same broadcast as setGroupStyle, but for whatever is currently selected across the four arrays — no persisted Group required. */
   setSelectionStyle: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  /** Bulk-sets indicatorEnabled/nameEnabled across every pipe in a persisted Group at once, one undo step. */
+  setGroupPipeFlag: (groupId: string, field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
+  /** Same bulk toggle as setGroupPipeFlag, but for every currently-selected pipe (loose multi-select). */
+  setSelectionPipeFlag: (field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   /** Deletes everything currently selected across all four categories at once, one undo step. */
   deleteSelection: () => void
   /** Clones whatever is currently selected (instances/pipes/shapes/leaderLines/group), offset one grid cell right and down, and selects the clone — repeated Ctrl+D naturally stacks further each time since it always clones "current selection" and re-selects its own output. */
@@ -1482,6 +1505,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         routingMode: 'straight',
         waypoints,
         indicatorEnabled: false,
+        nameEnabled: false,
         strokeColor: null,
         volumeTag: null,
         hopOverrides: {},
@@ -1572,6 +1596,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       ...pushHistory(state),
       pipes: state.pipes.map((p) => (p.instanceId === pipeId ? { ...p, indicatorEnabled: enabled } : p)),
+    })),
+
+  setPipeNameEnabled: (pipeId, enabled) =>
+    set((state) => ({
+      ...pushHistory(state),
+      pipes: state.pipes.map((p) => (p.instanceId === pipeId ? { ...p, nameEnabled: enabled } : p)),
     })),
 
   setPipeColor: (pipeId, color) =>
@@ -2044,6 +2074,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         field,
         value,
       ),
+    })),
+
+  setGroupPipeFlag: (groupId, field, value) =>
+    set((state) => {
+      const group = state.groups.find((g) => g.groupId === groupId)
+      if (!group) return {}
+      const pipeIds = new Set(group.members.filter((m) => m.kind === 'pipe').map((m) => m.id))
+      return { ...pushHistory(state), pipes: applyPipeFlagToIds(state.pipes, pipeIds, field, value) }
+    }),
+
+  setSelectionPipeFlag: (field, value) =>
+    set((state) => ({
+      ...pushHistory(state),
+      pipes: applyPipeFlagToIds(state.pipes, new Set(state.selectedPipeIds), field, value),
     })),
 
   /**

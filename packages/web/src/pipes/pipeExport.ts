@@ -52,5 +52,18 @@ export function exportPipeInstance(
     )
   }
 
+  if (pipe.nameEnabled) {
+    // Same bare-text style as a component instance's `name` role
+    // (createLabelBoxElement's non-box branch) — direct <text> child, no
+    // box. Text is the pipe's *volume* tag, same as "_indicator" above.
+    const mid = midpoint(displayPoints)
+    const nameTag = escapeXml(resolveIndicatorTag(pipe))
+    lines.push(
+      `    <g id="${nameTag}_name">`,
+      `      <text x="${fmt(mid.x)}" y="${fmt(mid.y - 10)}" text-anchor="middle" dominant-baseline="central" font-family="Arial" font-size="10">${nameTag}</text>`,
+      `    </g>`,
+    )
+  }
+
   return lines
 }

@@ -2829,6 +2829,17 @@ export class SvgCanvas {
         indicatorCircle.setAttribute('r', '5')
         indicatorCircle.setAttribute('fill', 'black')
         group.appendChild(indicatorCircle)
+
+        // Bare-text label, same style as a component instance's `name` role
+        // — see syncPipes below for why its content is the pipe's volume tag.
+        const nameText = document.createElementNS(SVG_NS, 'text')
+        nameText.setAttribute('class', 'gv-pipe-name')
+        nameText.setAttribute('text-anchor', 'middle')
+        nameText.setAttribute('dominant-baseline', 'central')
+        nameText.setAttribute('font-family', 'Arial')
+        nameText.setAttribute('font-size', '10')
+        nameText.style.pointerEvents = 'none'
+        group.appendChild(nameText)
       }
 
       const points = pointsByPipe.get(pipe.instanceId)
@@ -2842,6 +2853,7 @@ export class SvgCanvas {
       const linePath = group.querySelector<SVGPathElement>('.gv-pipe-line')!
       const hitPath = group.querySelector<SVGPathElement>('.gv-pipe-hit')!
       const indicatorCircle = group.querySelector<SVGCircleElement>('.gv-pipe-indicator')!
+      const nameText = group.querySelector<SVGTextElement>('.gv-pipe-name')!
 
       const d =
         pipe.routingMode === 'curved'
@@ -2859,6 +2871,14 @@ export class SvgCanvas {
       const mid = midpoint(displayPoints)
       indicatorCircle.setAttribute('cx', String(mid.x))
       indicatorCircle.setAttribute('cy', String(mid.y))
+
+      // Text is the pipe's *volume* tag, same as "_indicator" above — labels
+      // the connected run, not just this one segment (see PipeInstance.nameEnabled).
+      nameText.style.display = pipe.nameEnabled ? '' : 'none'
+      nameText.id = `${resolveIndicatorTag(pipe)}_name`
+      nameText.textContent = resolveIndicatorTag(pipe)
+      nameText.setAttribute('x', String(mid.x))
+      nameText.setAttribute('y', String(mid.y - 10))
     }
 
     for (const [pipeId, el] of this.pipeEls) {

@@ -101,6 +101,7 @@ function pipe(
     routingMode: 'straight',
     waypoints: [],
     indicatorEnabled,
+    nameEnabled: false,
     hopOverrides: {},
   }
 }

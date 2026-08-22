@@ -106,6 +106,15 @@ export interface PipeInstance {
   /** Whether this pipe exports a clickable/colorable "{tag}_indicator" element. */
   indicatorEnabled: boolean
   /**
+   * Whether this pipe exports a static "{tag}_name" label at its midpoint —
+   * bare text, same style as a component instance's `name` role. The text
+   * itself is always the pipe's *volume* tag (resolveIndicatorTag), same as
+   * "_indicator" — labels the connected run, not just this one segment,
+   * consistent with indicatorEnabled potentially being on for several pipes
+   * in one volume at once.
+   */
+  nameEnabled: boolean
+  /**
    * Explicit line color override. When unset, the line falls back to a
    * default that itself communicates clickability: black for pipes with
    * indicatorEnabled, light gray for purely decorative ones.

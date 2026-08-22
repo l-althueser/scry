@@ -63,12 +63,14 @@ function SelectionStylePanel({
   heading,
   counts,
   onStyleChange,
+  onPipeFlagChange,
   actions,
   footerHint,
 }: {
   heading: string
   counts: CompositionCounts
   onStyleChange: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  onPipeFlagChange: (field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   actions: { label: string; onClick: () => void; danger?: boolean }[]
   footerHint: string
 }) {
@@ -92,6 +94,17 @@ function SelectionStylePanel({
           <legend>Pipes</legend>
           <p className="field-hint">Applies to every selected pipe at once, as a single undo step.</p>
           <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
+
+          <div className="field-row">
+            <span style={{ flex: '1 1 auto' }}>Indicator (_indicator)</span>
+            <button onClick={() => onPipeFlagChange('indicatorEnabled', true)}>Enable</button>
+            <button onClick={() => onPipeFlagChange('indicatorEnabled', false)}>Disable</button>
+          </div>
+          <div className="field-row">
+            <span style={{ flex: '1 1 auto' }}>Name label (_name)</span>
+            <button onClick={() => onPipeFlagChange('nameEnabled', true)}>Enable</button>
+            <button onClick={() => onPipeFlagChange('nameEnabled', false)}>Disable</button>
+          </div>
         </fieldset>
       )}
 
@@ -135,6 +148,8 @@ export function PropertiesPanel() {
   const copySelectionToClipboard = useProjectStore((s) => s.copySelectionToClipboard)
   const setGroupStyle = useProjectStore((s) => s.setGroupStyle)
   const setSelectionStyle = useProjectStore((s) => s.setSelectionStyle)
+  const setGroupPipeFlag = useProjectStore((s) => s.setGroupPipeFlag)
+  const setSelectionPipeFlag = useProjectStore((s) => s.setSelectionPipeFlag)
   const deleteSelection = useProjectStore((s) => s.deleteSelection)
   const tagRenameError = useProjectStore((s) => s.tagRenameError)
   const renameInstance = useProjectStore((s) => s.renameInstance)
@@ -150,6 +165,7 @@ export function PropertiesPanel() {
   const renamePipeTag = useProjectStore((s) => s.renamePipeTag)
   const renameVolumeTag = useProjectStore((s) => s.renameVolumeTag)
   const setPipeIndicatorEnabled = useProjectStore((s) => s.setPipeIndicatorEnabled)
+  const setPipeNameEnabled = useProjectStore((s) => s.setPipeNameEnabled)
   const setPipeColor = useProjectStore((s) => s.setPipeColor)
   const setPipeRoutingMode = useProjectStore((s) => s.setPipeRoutingMode)
   const setHopOverride = useProjectStore((s) => s.setHopOverride)
@@ -281,6 +297,7 @@ export function PropertiesPanel() {
         heading="Group selected"
         counts={counts}
         onStyleChange={(field, value) => setGroupStyle(selectedGroupId, field, value)}
+        onPipeFlagChange={(field, value) => setGroupPipeFlag(selectedGroupId, field, value)}
         actions={[
           { label: 'Duplicate', onClick: () => duplicateSelection() },
           { label: 'Copy', onClick: () => copySelectionToClipboard() },
@@ -310,6 +327,7 @@ export function PropertiesPanel() {
           leaderLines: selectedLeaderLines.length,
         }}
         onStyleChange={(field, value) => setSelectionStyle(field, value)}
+        onPipeFlagChange={(field, value) => setSelectionPipeFlag(field, value)}
         actions={[
           { label: 'Duplicate', onClick: () => duplicateSelection() },
           { label: 'Copy', onClick: () => copySelectionToClipboard() },
@@ -401,6 +419,19 @@ export function PropertiesPanel() {
               : pipe.indicatorEnabled
                 ? 'Default: black (indicator enabled).'
                 : 'Default: light gray (no indicator, purely decorative).'}
+          </p>
+
+          <label className="role-checkbox">
+            <input
+              type="checkbox"
+              checked={pipe.nameEnabled}
+              onChange={(e) => setPipeNameEnabled(pipe.instanceId, e.target.checked)}
+            />
+            show name label (_name)
+          </label>
+          <p className="field-hint">
+            Bare text at the pipe&apos;s midpoint, showing <code>{resolveIndicatorTag(pipe)}</code> — the
+            volume tag, same as above, so it labels the whole connected run rather than just this segment.
           </p>
         </fieldset>
 
