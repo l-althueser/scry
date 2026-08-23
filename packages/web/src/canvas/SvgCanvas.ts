@@ -180,7 +180,12 @@ export interface SvgCanvasCallbacks {
 
 const MIN_SCALE = 0.2
 const MAX_SCALE = 8
-const MAX_GRID_LINES = 400
+// High enough that the grid still renders at the default zoom with the
+// finest (1/8x) grid-size option — a single <path> covering the whole
+// viewBox, not one DOM element per line, so a few thousand segments cost
+// nothing extra in DOM size; this cap only exists to bound how much `d`
+// string gets built/rasterized at extreme zoom-out.
+const MAX_GRID_LINES = 6000
 const PORT_SNAP_RADIUS = 12
 /** Screen-pixel radius for alignment-guide snapping, converted to world units per current zoom. */
 const ALIGN_SNAP_PX = 8
@@ -224,6 +229,8 @@ export class SvgCanvas {
 
   private viewBox: ViewBox = { x: 0, y: 0, w: 1000, h: 700 }
   private gridSize: number
+  /** Keeps the viewBox's aspect ratio matching the container's actual (resizable) aspect ratio — see syncViewBoxAspect. Without this, a container whose aspect ratio doesn't match the viewBox's fixed 1000:700 gets letterboxed by the SVG's default preserveAspectRatio, and the grid (which only fills the viewBox rectangle) visibly stops short of the letterboxed edges. */
+  private readonly resizeObserver: ResizeObserver
   private instanceEls = new Map<string, SVGGElement>()
   private pipeEls = new Map<string, SVGGElement>()
   private shapeEls = new Map<string, SVGGElement>()
@@ -410,6 +417,9 @@ export class SvgCanvas {
     this.applyViewBox()
     this.drawGrid()
 
+    this.resizeObserver = new ResizeObserver(() => this.syncViewBoxAspect())
+    this.resizeObserver.observe(this.svg)
+
     this.svg.addEventListener('pointerdown', this.onPointerDown)
     this.svg.addEventListener('pointermove', this.onPointerMove)
     this.svg.addEventListener('pointerup', this.onPointerUp)
@@ -458,6 +468,7 @@ export class SvgCanvas {
   }
 
   destroy() {
+    this.resizeObserver.disconnect()
     this.svg.removeEventListener('pointerdown', this.onPointerDown)
     this.svg.removeEventListener('pointermove', this.onPointerMove)
     this.svg.removeEventListener('pointerup', this.onPointerUp)
@@ -730,6 +741,28 @@ export class SvgCanvas {
     return { x: world.x, y: world.y }
   }
 
+  /**
+   * Recomputes viewBox.h from the container's *current* pixel aspect ratio
+   * against the existing viewBox.w (treated as the authoritative "world
+   * units per container width" — i.e. the current zoom level), keeping the
+   * vertical center fixed. Runs on every ResizeObserver tick (container
+   * resize, side panel toggling, window resize, ...) so the viewBox always
+   * exactly matches what's visibly on screen — no default-preserveAspectRatio
+   * letterboxing where the grid (and background) would fall short of the
+   * container's actual edges.
+   */
+  private syncViewBoxAspect() {
+    const width = this.svg.clientWidth
+    const height = this.svg.clientHeight
+    if (width === 0 || height === 0) return
+    const targetH = this.viewBox.w * (height / width)
+    if (Math.abs(targetH - this.viewBox.h) < 0.5) return
+    const centerY = this.viewBox.y + this.viewBox.h / 2
+    this.viewBox = { ...this.viewBox, h: targetH, y: centerY - targetH / 2 }
+    this.applyViewBox()
+    this.drawGrid()
+  }
+
   private drawGrid() {
     while (this.gridLayer.firstChild) this.gridLayer.removeChild(this.gridLayer.firstChild)
 
@@ -753,7 +786,7 @@ export class SvgCanvas {
     }
     path.setAttribute('d', d.trim())
     path.setAttribute('stroke', '#dddddd')
-    path.setAttribute('stroke-width', String(Math.max(this.viewBox.w / 1000, 0.5)))
+    path.setAttribute('stroke-width', String(Math.max(this.viewBox.w / 1500, 0.35)))
     path.setAttribute('fill', 'none')
     this.gridLayer.appendChild(path)
   }

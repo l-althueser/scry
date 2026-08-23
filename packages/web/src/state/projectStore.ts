@@ -687,12 +687,14 @@ export interface RoleSelection {
  * placement; Shift+arrow jumps by a full grid cell for fast repositioning.
  * A selected role always moves in even finer, sub-grid steps.
  */
-const INSTANCE_NUDGE_STEP = 4
+const INSTANCE_NUDGE_STEP = 0.5
 const INSTANCE_NUDGE_STEP_FAST = 20
-const ROLE_NUDGE_STEP = 1
+const ROLE_NUDGE_STEP = 0.5
 const ROLE_NUDGE_STEP_FAST = 5
-const WAYPOINT_NUDGE_STEP = 1
+const WAYPOINT_NUDGE_STEP = 0.5
 const WAYPOINT_NUDGE_STEP_FAST = 5
+const SHAPE_NUDGE_STEP = 0.5
+const SHAPE_NUDGE_STEP_FAST = 20
 
 interface ProjectState {
   instances: ComponentInstance[]
@@ -997,7 +999,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   placingType: null,
   drawingShapeKind: null,
   connectionPointTargetLayerId: null,
-  gridSize: BASE_GRID_SIZE,
+  gridSize: BASE_GRID_SIZE / 8,
   tagRenameError: null,
   routeError: null,
   groupDragOrigins: null,
@@ -1498,6 +1500,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               ? { ...inst, transform: { ...inst.transform, x: inst.transform.x + delta.x, y: inst.transform.y + delta.y } }
               : inst,
           ),
+        }
+      }
+
+      if (state.selectedShapeIds.length > 0) {
+        const step = fine ? SHAPE_NUDGE_STEP_FAST : SHAPE_NUDGE_STEP
+        const delta = { x: direction.x * step, y: direction.y * step }
+        return {
+          ...pushHistory(state),
+          freeShapes: state.freeShapes.map((shape) =>
+            state.selectedShapeIds.includes(shape.instanceId)
+              ? { ...shape, points: shape.points.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })) }
+              : shape,
+          ),
+        }
+      }
+
+      if (state.selectedLayerId) {
+        const layer = state.layers.find((l) => l.layerId === state.selectedLayerId)
+        // Locked images can't be dragged on canvas either — nudge respects the same rule.
+        if (layer && layer.kind === 'image' && !layer.locked) {
+          const step = fine ? SHAPE_NUDGE_STEP_FAST : SHAPE_NUDGE_STEP
+          const delta = { x: direction.x * step, y: direction.y * step }
+          return {
+            ...pushHistory(state),
+            layers: state.layers.map((l) =>
+              l.layerId === state.selectedLayerId && l.kind === 'image'
+                ? { ...l, x: l.x + delta.x, y: l.y + delta.y }
+                : l,
+            ),
+          }
         }
       }
 

@@ -112,11 +112,12 @@ const ARROW_DIRECTIONS: Record<string, Point> = {
   ArrowRight: { x: 1, y: 0 },
 }
 
-/** Grid-size toggle options: standard (the app's usual default) plus two finer subdivisions, derived from it rather than separate hardcoded numbers. */
+/** Grid-size toggle options: standard (the app's usual default) plus three finer subdivisions, derived from it rather than separate hardcoded numbers. */
 const GRID_SIZE_OPTIONS = [
   { label: '1×', value: BASE_GRID_SIZE },
   { label: '½×', value: BASE_GRID_SIZE / 2 },
   { label: '¼×', value: BASE_GRID_SIZE / 4 },
+  { label: '⅛×', value: BASE_GRID_SIZE / 8 },
 ]
 
 export default function App() {
@@ -335,7 +336,14 @@ export default function App() {
       }
 
       const direction = ARROW_DIRECTIONS[evt.key]
-      if (direction && (selectedWaypoint || selectedRole || selectedInstanceIds.length > 0)) {
+      if (
+        direction &&
+        (selectedWaypoint ||
+          selectedRole ||
+          selectedInstanceIds.length > 0 ||
+          selectedShapeIds.length > 0 ||
+          selectedLayerId)
+      ) {
         evt.preventDefault()
         nudgeSelection(direction, evt.shiftKey)
         return
