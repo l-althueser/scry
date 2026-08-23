@@ -72,7 +72,7 @@ function effectiveBoxSize(instance: ComponentInstance): { width: number; height:
 }
 
 type PolygonShape = 'diamond' | 'connector-arrow' | 'double-connector-arrow' | 'block-arrow' | 'double-block-arrow'
-type BoxShape = 'rectangle' | 'rounded-rectangle' | 'ellipse' | PolygonShape
+type BoxShape = 'rectangle' | 'rounded-rectangle' | 'ellipse' | 'cylinder' | PolygonShape
 
 const POLYGON_SHAPES: readonly PolygonShape[] = [
   'diamond',
@@ -81,10 +81,41 @@ const POLYGON_SHAPES: readonly PolygonShape[] = [
   'block-arrow',
   'double-block-arrow',
 ]
-const ALL_SHAPES: readonly BoxShape[] = ['rectangle', 'rounded-rectangle', 'ellipse', ...POLYGON_SHAPES]
+const ALL_SHAPES: readonly BoxShape[] = ['rectangle', 'rounded-rectangle', 'ellipse', 'cylinder', ...POLYGON_SHAPES]
 
 function isPolygonShape(shape: BoxShape): shape is PolygonShape {
   return (POLYGON_SHAPES as readonly string[]).includes(shape)
+}
+
+/** Flowchart/tank "cylinder": an elliptical cap top and bottom, joined by straight sides — the standard vessel/storage-tank symbol. Cap height scales with the box but stays legible at small sizes. */
+function cylinderCapHeight(width: number, height: number): number {
+  return Math.max(4, Math.min(height * 0.2, width * 0.4, height / 2 - 1))
+}
+
+/** Outline including the visible front arc of the bottom cap (the top cap's own outline doubles as the "lid" — see cylinderLidD for the extra seam line across its back edge). */
+function cylinderBodyD(width: number, height: number): string {
+  const rx = width / 2
+  const ry = cylinderCapHeight(width, height)
+  return `M0 ${fmt(ry)} A${fmt(rx)} ${fmt(ry)} 0 0 0 ${fmt(width)} ${fmt(ry)} L${fmt(width)} ${fmt(height - ry)} A${fmt(rx)} ${fmt(ry)} 0 0 0 0 ${fmt(height - ry)} Z`
+}
+
+/** One full-ellipse trace at a given cap's y-center, as its own path subcommand (see cylinderLidD, which combines one of these per cap). */
+function ellipseTraceD(width: number, ry: number, cy: number): string {
+  const rx = width / 2
+  return `M0 ${fmt(cy)} A${fmt(rx)} ${fmt(ry)} 0 0 0 ${fmt(width)} ${fmt(cy)} A${fmt(rx)} ${fmt(ry)} 0 0 0 0 ${fmt(cy)}`
+}
+
+/**
+ * Both caps traced as complete ellipses (not just the front arc already part
+ * of cylinderBodyD's silhouette) — a true tank/vessel look where both the
+ * top and bottom disks are fully visible, rather than the flowchart/database
+ * convention of a full top ellipse and a bare front arc on the bottom.
+ * Combining both into one path (two "M" subcommands) avoids a second DOM
+ * element — render()/update() just set this one path's "d".
+ */
+function cylinderLidD(width: number, height: number): string {
+  const ry = cylinderCapHeight(width, height)
+  return `${ellipseTraceD(width, ry, ry)} ${ellipseTraceD(width, ry, height - ry)}`
 }
 
 function boxShape(instance: ComponentInstance): BoxShape {
@@ -260,8 +291,13 @@ function appendShapeSlots(group: SVGGElement, withStroke: boolean) {
   polygon.style.display = 'none'
   group.appendChild(polygon)
 
+  const cylinder = document.createElementNS(SVG_NS, 'path')
+  cylinder.setAttribute('class', 'gv-eqbox-shape-cylinder')
+  cylinder.style.display = 'none'
+  group.appendChild(cylinder)
+
   if (withStroke) {
-    for (const el of [rect, ellipse, polygon]) {
+    for (const el of [rect, ellipse, polygon, cylinder]) {
       el.setAttribute('stroke', '#000000')
       el.setAttribute('stroke-width', '1.5')
     }
@@ -273,8 +309,14 @@ function applyShapeToGroup(group: SVGGElement, shape: BoxShape, width: number, h
   const rect = group.querySelector<SVGRectElement>('.gv-eqbox-shape-rect')
   const ellipse = group.querySelector<SVGEllipseElement>('.gv-eqbox-shape-ellipse')
   const polygon = group.querySelector<SVGPolygonElement>('.gv-eqbox-shape-polygon')
+  const cylinder = group.querySelector<SVGPathElement>('.gv-eqbox-shape-cylinder')
   const isRect = shape === 'rectangle' || shape === 'rounded-rectangle'
   const isPolygon = isPolygonShape(shape)
+  const isCylinder = shape === 'cylinder'
+  if (cylinder) {
+    cylinder.style.display = isCylinder ? '' : 'none'
+    if (isCylinder) cylinder.setAttribute('d', cylinderBodyD(width, height))
+  }
   if (rect) {
     rect.style.display = isRect ? '' : 'none'
     rect.setAttribute('width', String(width))
@@ -314,6 +356,18 @@ function render(group: SVGGElement) {
   bodyFillGroup.setAttribute('fill', '#e5e7eb')
   appendShapeSlots(bodyFillGroup, true)
   bodyGroup.appendChild(bodyFillGroup)
+
+  // The cylinder's "lid" seam — the top cap's back edge, drawn on top of the
+  // fill/indicator groups so it stays visible regardless of their color.
+  // Not a shape slot like the other three (see appendShapeSlots): purely
+  // decorative, never part of the fill/indicator silhouette itself.
+  const cylinderLid = document.createElementNS(SVG_NS, 'path')
+  cylinderLid.setAttribute('class', 'gv-eqbox-cylinder-lid')
+  cylinderLid.setAttribute('fill', 'none')
+  cylinderLid.setAttribute('stroke', '#000000')
+  cylinderLid.setAttribute('stroke-width', '1.5')
+  cylinderLid.style.display = 'none'
+  bodyGroup.appendChild(cylinderLid)
 
   // The optional centered label baked directly into the box — not a
   // Node-RED role (no data-role/id): purely static decorative text, same as
@@ -368,6 +422,12 @@ function update(group: SVGGElement, instance: ComponentInstance) {
   const boxTextEl = group.querySelector<SVGTextElement>('.gv-eqbox-text')
   if (boxTextEl) renderBoxTextInto(boxTextEl, text, width, height)
 
+  const cylinderLid = group.querySelector<SVGPathElement>('.gv-eqbox-cylinder-lid')
+  if (cylinderLid) {
+    cylinderLid.style.display = shape === 'cylinder' ? '' : 'none'
+    if (shape === 'cylinder') cylinderLid.setAttribute('d', cylinderLidD(width, height))
+  }
+
   const indicatorRole = instance.roles.find((r) => r.role === 'indicator')
   const indicatorGroup = group.querySelector<SVGGElement>('.gv-role-indicator')
   if (indicatorGroup) {
@@ -398,6 +458,9 @@ function shapeSvgElement(shape: BoxShape, width: number, height: number, extraAt
   if (shape === 'ellipse') {
     return `<ellipse cx="${fmt(width / 2)}" cy="${fmt(height / 2)}" rx="${fmt(width / 2)}" ry="${fmt(height / 2)}"${extraAttrs} />`
   }
+  if (shape === 'cylinder') {
+    return `<path d="${cylinderBodyD(width, height)}"${extraAttrs} />`
+  }
   if (isPolygonShape(shape)) {
     return `<polygon points="${polygonPoints(shape, width, height)}"${extraAttrs} />`
   }
@@ -418,6 +481,9 @@ function exportInstance(instance: ComponentInstance): string[] {
   lines.push(`    <g transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(rotationDeg)})">`)
   const fillColor = escapeXml(bodyFillColor(instance))
   lines.push(`      ${shapeSvgElement(shape, width, height, ` fill="${fillColor}" stroke="#000000" stroke-width="1.5"`)}`)
+  if (shape === 'cylinder') {
+    lines.push(`      <path d="${cylinderLidD(width, height)}" fill="none" stroke="#000000" stroke-width="1.5" />`)
+  }
   if (text.trim()) {
     const bodyLines = textLines(text)
     const totalHeight = bodyLines.length * LINE_HEIGHT
@@ -477,6 +543,7 @@ const instanceOptions: InstanceOptionDescriptor[] = [
       { value: 'rectangle', label: 'Rectangle' },
       { value: 'rounded-rectangle', label: 'Rounded rectangle' },
       { value: 'ellipse', label: 'Ellipse' },
+      { value: 'cylinder', label: 'Cylinder' },
       { value: 'diamond', label: 'Diamond' },
       { value: 'connector-arrow', label: 'Arrow (off-page connector)' },
       { value: 'double-connector-arrow', label: 'Double arrow (off-page connector)' },
