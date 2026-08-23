@@ -1,5 +1,6 @@
 import type { ComponentInstance, RoleInstance, Suffix } from '@svg-editor/shared'
 import {
+  LABEL_BOX_HEIGHT,
   LABEL_ROLE_ORDER,
   PLACEHOLDER_ROLE_TEXT,
   applyRoleBoxStyling,
@@ -15,7 +16,9 @@ import { registerComponentType } from './registry'
 
 export const PROCESS_INDICATOR_TYPE = 'process-indicator'
 
-const ROW_HEIGHT = 20
+// Equal to the box height so consecutive label boxes' borders sit flush
+// against each other (no gap) instead of leaving a visible gap between rows.
+const ROW_HEIGHT = LABEL_BOX_HEIGHT
 /** Unlike the valve, there's no icon to anchor to — name/value/setpoint just stack from the origin. */
 const ROLE_ORDER: Suffix[] = LABEL_ROLE_ORDER
 
@@ -63,7 +66,7 @@ function updateProcessIndicator(group: SVGGElement, instance: ComponentInstance)
 
     const text = el.querySelector('text')
     if (!text) continue
-    text.textContent = role.role === 'name' ? instance.tag : PLACEHOLDER_ROLE_TEXT
+    text.textContent = role.role === 'name' ? (role.labelTextOverride ?? instance.tag) : PLACEHOLDER_ROLE_TEXT
   }
 }
 
@@ -84,7 +87,7 @@ function exportProcessIndicatorInstance(instance: ComponentInstance): string[] {
     const rotated = rotatePoint(role.offset, rotationDeg)
     const labelX = x + rotated.x
     const labelY = y + rotated.y
-    const text = role.role === 'name' ? tag : PLACEHOLDER_ROLE_TEXT
+    const text = role.role === 'name' ? escapeXml(role.labelTextOverride ?? instance.tag) : PLACEHOLDER_ROLE_TEXT
 
     lines.push(
       `    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, rotationDeg + (role.rotationDeg ?? 0))}">`,

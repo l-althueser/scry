@@ -39,6 +39,15 @@ export interface RoleInstance {
   strokeColor?: string | null
   /** Text color override — applies to all three label roles. null resets to the default. */
   textColor?: string | null
+  /**
+   * Overrides the *visible* text of the `name` role only — the exported
+   * `id="{tag}_name"` and every other place the instance's tag is used
+   * (pipe/port references, other roles, tag-uniqueness checks, ...) always
+   * stay the real tag; this only swaps what's rendered inside the label
+   * itself, e.g. showing a friendlier caption than the terse tag. Ignored
+   * for value/setpoint/indicator. null/undefined = show the tag as before.
+   */
+  labelTextOverride?: string | null
 }
 
 export interface ComponentInstance {

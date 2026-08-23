@@ -2,8 +2,6 @@ import type { ComponentInstance, Port, RoleInstance } from '@svg-editor/shared'
 import {
   DEFAULT_INDICATOR_COLOR,
   LABEL_BOX_HEIGHT,
-  LABEL_BOX_WIDTH,
-  NAME_TEXT_BASELINE_Y,
   PLACEHOLDER_ROLE_TEXT,
   SVG_NS,
   applyRoleBoxStyling,
@@ -201,7 +199,9 @@ function boxCorners(width: number, height: number): { x: number; y: number }[] {
  * dragging a role (already supported for every type) repositions it by hand.
  */
 const LABEL_START_Y = MIN_HEIGHT + 5
-const LABEL_ROW_HEIGHT = 20
+// Equal to the box height so consecutive label boxes' borders sit flush
+// against each other (no gap) instead of leaving a visible gap between rows.
+const LABEL_ROW_HEIGHT = LABEL_BOX_HEIGHT
 
 function bodyFillColor(instance: ComponentInstance): string {
   const value = instance.propertyValues.fillColor
@@ -328,32 +328,7 @@ function render(group: SVGGElement) {
 
   group.appendChild(bodyGroup)
 
-  const nameGroup = document.createElementNS(SVG_NS, 'g')
-  nameGroup.setAttribute('class', 'gv-role gv-role-name')
-  nameGroup.setAttribute('data-role', 'name')
-
-  const nameHitArea = document.createElementNS(SVG_NS, 'rect')
-  nameHitArea.setAttribute('x', String(-LABEL_BOX_WIDTH / 2))
-  nameHitArea.setAttribute('y', '0')
-  nameHitArea.setAttribute('width', String(LABEL_BOX_WIDTH))
-  nameHitArea.setAttribute('height', String(LABEL_BOX_HEIGHT))
-  nameHitArea.setAttribute('fill', 'transparent')
-  nameHitArea.setAttribute('stroke', 'transparent')
-  nameHitArea.setAttribute('stroke-width', '1')
-  nameHitArea.dataset.defaultFill = 'transparent'
-  nameHitArea.dataset.defaultStroke = 'transparent'
-  nameGroup.appendChild(nameHitArea)
-
-  const nameText = document.createElementNS(SVG_NS, 'text')
-  nameText.setAttribute('x', '0')
-  nameText.setAttribute('y', String(NAME_TEXT_BASELINE_Y))
-  nameText.setAttribute('text-anchor', 'middle')
-  nameText.setAttribute('dominant-baseline', 'central')
-  nameText.setAttribute('font-family', 'Arial')
-  nameText.setAttribute('font-size', '10')
-  nameGroup.appendChild(nameText)
-  group.appendChild(nameGroup)
-
+  group.appendChild(createLabelBoxElement('name'))
   group.appendChild(createLabelBoxElement('value'))
   group.appendChild(createLabelBoxElement('setpoint'))
 }
@@ -414,7 +389,7 @@ function update(group: SVGGElement, instance: ComponentInstance) {
 
     const roleText = el.querySelector('text')
     if (!roleText) continue
-    roleText.textContent = role.role === 'name' ? instance.tag : PLACEHOLDER_ROLE_TEXT
+    roleText.textContent = role.role === 'name' ? (role.labelTextOverride ?? instance.tag) : PLACEHOLDER_ROLE_TEXT
   }
 }
 
@@ -474,30 +449,16 @@ function exportInstance(instance: ComponentInstance): string[] {
     const abs = rotatePoint(role.offset, rotationDeg)
     const labelX = x + abs.x
     const labelY = y + abs.y
-    const roleText = role.role === 'name' ? tag : PLACEHOLDER_ROLE_TEXT
+    const roleText = role.role === 'name' ? escapeXml(role.labelTextOverride ?? instance.tag) : PLACEHOLDER_ROLE_TEXT
 
     lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
-    if (role.role === 'value' || role.role === 'setpoint') {
-      lines.push(
-        ...labelBoxExportLines('      ', role.role, roleText, {
-          fill: role.fillColor,
-          stroke: role.strokeColor,
-          textColor: role.textColor,
-        }),
-      )
-    } else if (role.fillColor || role.strokeColor) {
-      lines.push(
-        ...labelBoxExportLines('      ', role.role, roleText, {
-          fill: role.fillColor ?? 'transparent',
-          stroke: role.strokeColor ?? 'transparent',
-          textColor: role.textColor,
-        }),
-      )
-    } else {
-      lines.push(
-        `      <text x="0" y="${NAME_TEXT_BASELINE_Y}" text-anchor="middle" dominant-baseline="central" font-family="Arial" font-size="10" fill="${role.textColor ?? '#000000'}">${escapeXml(roleText)}</text>`,
-      )
-    }
+    lines.push(
+      ...labelBoxExportLines('      ', role.role, roleText, {
+        fill: role.fillColor,
+        stroke: role.strokeColor,
+        textColor: role.textColor,
+      }),
+    )
     lines.push(`    </g>`)
   }
 

@@ -224,6 +224,7 @@ export function PropertiesPanel() {
   const setRolePosition = useProjectStore((s) => s.setRolePosition)
   const setRoleRotation = useProjectStore((s) => s.setRoleRotation)
   const setRoleColor = useProjectStore((s) => s.setRoleColor)
+  const setRoleLabelTextOverride = useProjectStore((s) => s.setRoleLabelTextOverride)
   const deleteInstance = useProjectStore((s) => s.deleteInstance)
   const rotateInstance = useProjectStore((s) => s.rotateInstance)
   const centerRoles = useProjectStore((s) => s.centerRoles)
@@ -1184,6 +1185,17 @@ export function PropertiesPanel() {
           return (
             <fieldset key={role.role} className="field roles-field">
               <legend>Label: {role.role}</legend>
+              {role.role === 'name' && (
+                <label className="field">
+                  <span>Display text</span>
+                  <input
+                    type="text"
+                    placeholder={instance.tag}
+                    value={role.labelTextOverride ?? ''}
+                    onChange={(e) => setRoleLabelTextOverride(instance.instanceId, e.target.value)}
+                  />
+                </label>
+              )}
               <div className="field-row">
                 <label className="field">
                   <span>X</span>

@@ -76,7 +76,9 @@ export interface IconComponentSpec {
 }
 
 const DEFAULT_LABEL_START_Y = 24
-const LABEL_ROW_HEIGHT = 20
+// Equal to the box height so consecutive label boxes' borders sit flush
+// against each other (no gap) instead of leaving a visible gap between rows.
+const LABEL_ROW_HEIGHT = LABEL_BOX_HEIGHT
 
 /**
  * Factory for the "icon-bodied inline device" pattern shared by every
@@ -243,33 +245,40 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
 
     group.appendChild(bodyGroup)
 
-    const nameGroup = document.createElementNS(SVG_NS, 'g')
-    nameGroup.setAttribute('class', 'gv-role gv-role-name')
-    nameGroup.setAttribute('data-role', 'name')
+    if (spec.category === 'Valves') {
+      // Valves keep the plain bare-text name label (no background/box) —
+      // every other icon-bodied type gets the same boxed style value/setpoint
+      // already use (see the `else` branch below).
+      const nameGroup = document.createElementNS(SVG_NS, 'g')
+      nameGroup.setAttribute('class', 'gv-role gv-role-name')
+      nameGroup.setAttribute('data-role', 'name')
 
-    // SVG <text> only registers pointer hits on the actual painted glyphs —
-    // without this, clicking near (but not exactly on) the name misses it.
-    const nameHitArea = document.createElementNS(SVG_NS, 'rect')
-    nameHitArea.setAttribute('x', String(-LABEL_BOX_WIDTH / 2))
-    nameHitArea.setAttribute('y', '0')
-    nameHitArea.setAttribute('width', String(LABEL_BOX_WIDTH))
-    nameHitArea.setAttribute('height', String(LABEL_BOX_HEIGHT))
-    nameHitArea.setAttribute('fill', 'transparent')
-    nameHitArea.setAttribute('stroke', 'transparent')
-    nameHitArea.setAttribute('stroke-width', '1')
-    nameHitArea.dataset.defaultFill = 'transparent'
-    nameHitArea.dataset.defaultStroke = 'transparent'
-    nameGroup.appendChild(nameHitArea)
+      // SVG <text> only registers pointer hits on the actual painted glyphs —
+      // without this, clicking near (but not exactly on) the name misses it.
+      const nameHitArea = document.createElementNS(SVG_NS, 'rect')
+      nameHitArea.setAttribute('x', String(-LABEL_BOX_WIDTH / 2))
+      nameHitArea.setAttribute('y', '0')
+      nameHitArea.setAttribute('width', String(LABEL_BOX_WIDTH))
+      nameHitArea.setAttribute('height', String(LABEL_BOX_HEIGHT))
+      nameHitArea.setAttribute('fill', 'transparent')
+      nameHitArea.setAttribute('stroke', 'transparent')
+      nameHitArea.setAttribute('stroke-width', '1')
+      nameHitArea.dataset.defaultFill = 'transparent'
+      nameHitArea.dataset.defaultStroke = 'transparent'
+      nameGroup.appendChild(nameHitArea)
 
-    const nameText = document.createElementNS(SVG_NS, 'text')
-    nameText.setAttribute('x', '0')
-    nameText.setAttribute('y', String(NAME_TEXT_BASELINE_Y))
-    nameText.setAttribute('text-anchor', 'middle')
-    nameText.setAttribute('dominant-baseline', 'central')
-    nameText.setAttribute('font-family', 'Arial')
-    nameText.setAttribute('font-size', '10')
-    nameGroup.appendChild(nameText)
-    group.appendChild(nameGroup)
+      const nameText = document.createElementNS(SVG_NS, 'text')
+      nameText.setAttribute('x', '0')
+      nameText.setAttribute('y', String(NAME_TEXT_BASELINE_Y))
+      nameText.setAttribute('text-anchor', 'middle')
+      nameText.setAttribute('dominant-baseline', 'central')
+      nameText.setAttribute('font-family', 'Arial')
+      nameText.setAttribute('font-size', '10')
+      nameGroup.appendChild(nameText)
+      group.appendChild(nameGroup)
+    } else {
+      group.appendChild(createLabelBoxElement('name'))
+    }
 
     group.appendChild(createLabelBoxElement('value'))
     group.appendChild(createLabelBoxElement('setpoint'))
@@ -310,7 +319,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
 
       const text = el.querySelector('text')
       if (!text) continue
-      text.textContent = role.role === 'name' ? instance.tag : PLACEHOLDER_ROLE_TEXT
+      text.textContent = role.role === 'name' ? (role.labelTextOverride ?? instance.tag) : PLACEHOLDER_ROLE_TEXT
     }
   }
 
@@ -370,10 +379,15 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       const abs = rotatePoint(role.offset, rotationDeg)
       const labelX = x + abs.x
       const labelY = y + abs.y
-      const text = role.role === 'name' ? tag : PLACEHOLDER_ROLE_TEXT
+      const text = role.role === 'name' ? escapeXml(role.labelTextOverride ?? instance.tag) : PLACEHOLDER_ROLE_TEXT
+
+      // name is boxed like value/setpoint for every type except Valves,
+      // which keep the plain bare-text label (see the matching branch in
+      // render() above) unless the user explicitly picked a color for it.
+      const nameIsBoxed = role.role === 'name' && spec.category !== 'Valves'
 
       lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
-      if (role.role === 'value' || role.role === 'setpoint') {
+      if (role.role === 'value' || role.role === 'setpoint' || nameIsBoxed) {
         lines.push(
           ...labelBoxExportLines('      ', role.role, text, {
             fill: role.fillColor,

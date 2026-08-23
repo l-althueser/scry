@@ -782,6 +782,8 @@ interface ProjectState {
     key: 'fillColor' | 'strokeColor' | 'textColor',
     value: string | null,
   ) => void
+  /** Overrides only the `name` role's *displayed* text — the real tag (and the exported "{tag}_name" id) is untouched. null/'' resets to showing the tag. */
+  setRoleLabelTextOverride: (instanceId: string, value: string | null) => void
   centerRoles: (instanceId: string) => void
   /** pipePoints: free pipe knots caught in the same box-select as instanceIds ("mark knots like elements") — they translate by the same delta as the group for the duration of this drag. */
   beginGroupDrag: (
@@ -1208,6 +1210,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       instances: state.instances.map((inst) =>
         inst.instanceId === instanceId
           ? { ...inst, roles: inst.roles.map((r) => (r.role === role ? { ...r, [key]: value } : r)) }
+          : inst,
+      ),
+    })),
+
+  setRoleLabelTextOverride: (instanceId, value) =>
+    set((state) => ({
+      ...pushHistory(state),
+      instances: state.instances.map((inst) =>
+        inst.instanceId === instanceId
+          ? {
+              ...inst,
+              roles: inst.roles.map((r) =>
+                r.role === 'name' ? { ...r, labelTextOverride: value || null } : r,
+              ),
+            }
           : inst,
       ),
     })),

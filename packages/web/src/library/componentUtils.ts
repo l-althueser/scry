@@ -122,7 +122,7 @@ export function roleBoxCorners(
 export const BOX_ROLE_FILL: Partial<Record<string, string>> = {
   value: '#d8d8d8',
   setpoint: '#ffffff',
-  name: '#ffffff',
+  name: '#f6c59d',
 }
 
 /** A centered box+text label DOM element for one role, shared by every component type that uses this style. */
