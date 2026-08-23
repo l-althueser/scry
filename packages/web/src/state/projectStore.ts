@@ -58,6 +58,26 @@ const DEFAULT_VECTOR_LAYER: Layer = { layerId: 'default', name: 'Default', visib
 /** The "1x"/standard grid size — the toolbar's grid toggle offers this plus 1/2x and 1/4x, derived from it rather than hardcoded separately. */
 export const BASE_GRID_SIZE = 20
 
+/**
+ * Remembers whichever project name was last open in *this browser*, so a
+ * page reload reopens that project instead of always falling back to the
+ * hardcoded 'my-project' default (see loadInitialProject, which still does
+ * the real work of actually fetching it from the server and only trusts
+ * this as a starting guess). Read once at module load for the store's
+ * initial state; written by the subscriber right after it, on every actual
+ * change. localStorage is per-browser, not synced across machines/tabs —
+ * consistent with this being a local UX convenience, not project data.
+ */
+const LAST_PROJECT_STORAGE_KEY = 'gv-last-project-name'
+
+function readLastProjectName(): string {
+  try {
+    return localStorage.getItem(LAST_PROJECT_STORAGE_KEY) || 'my-project'
+  } catch {
+    return 'my-project'
+  }
+}
+
 const instanceCounters: Record<string, number> = {}
 const PIPE_COUNTER_KEY = 'pipe'
 const PIPE_TAG_PREFIX = 'L'
@@ -987,7 +1007,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   past: [],
   future: [],
 
-  projectName: 'my-project',
+  projectName: readLastProjectName(),
   availableProjects: [],
   serverStatus: null,
   serverBusy: false,
@@ -2520,12 +2540,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   /**
    * Called once on app mount (see App.tsx): a fresh page load otherwise
-   * starts from the client-side default empty project (projectName:
-   * 'my-project', but nothing actually loaded from the server) even though
-   * a same-named project may already exist there from a previous session —
-   * reloading the page looked like silent data loss. If the current
-   * projectName is among the server's projects, load it for real; otherwise
-   * this is genuinely a fresh/never-saved project, left as-is.
+   * starts from a client-side empty project — `projectName` is already
+   * seeded from localStorage (readLastProjectName, whichever project was
+   * last open in this browser — falls back to 'my-project' the very first
+   * time), but nothing has actually been loaded from the server yet — even
+   * though a same-named project may already exist there from a previous
+   * session, which made reloading the page look like silent data loss. If
+   * the current projectName is among the server's projects, load it for
+   * real; otherwise this is genuinely a fresh/never-saved project, left
+   * as-is.
    */
   loadInitialProject: async () => {
     try {
@@ -2834,6 +2857,19 @@ useProjectStore.subscribe((state, prevState) => {
     autosaveTimer = null
     void useProjectStore.getState().saveProjectToServer()
   }, AUTOSAVE_DEBOUNCE_MS)
+})
+
+// Remembers the open project name across reloads (see readLastProjectName)
+// — independent of the autosave subscriber above, since this cares about
+// *which* project is open, not its content.
+useProjectStore.subscribe((state, prevState) => {
+  if (state.projectName === prevState.projectName) return
+  try {
+    localStorage.setItem(LAST_PROJECT_STORAGE_KEY, state.projectName)
+  } catch {
+    // Storage unavailable (private browsing, quota, ...) — just means the
+    // next reload falls back to the hardcoded default, not fatal.
+  }
 })
 
 // Periodic "did someone else change this" check — deliberately just a
