@@ -1150,12 +1150,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (!TAG_PATTERN.test(trimmed)) {
         return { tagRenameError: 'Tag must start with a letter (e.g. V1, HV208).' }
       }
-      const conflict =
-        state.instances.some((inst) => inst.tag === trimmed && inst.instanceId !== instanceId) ||
-        state.pipes.some((pipe) => pipe.tag === trimmed)
-      if (conflict) {
-        return { tagRenameError: `Tag "${trimmed}" is already in use.` }
-      }
+      // Duplicates are allowed (e.g. deliberately sharing a tag across a
+      // couple of instances) — the properties panel warns about it instead
+      // of blocking it, see duplicateInstanceTagCount in PropertiesPanel.tsx.
       return {
         ...pushHistory(state),
         tagRenameError: null,

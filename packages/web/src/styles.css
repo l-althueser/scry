@@ -414,6 +414,15 @@ body {
   margin: -0.35rem 0 0.5rem;
 }
 
+.field-warning {
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.75rem;
+  margin: -0.1rem 0 0.5rem;
+}
+
 .field-hint {
   color: #888;
   font-size: 0.72rem;
@@ -484,7 +493,8 @@ body {
 .roles-field .field,
 .roles-field .field-row,
 .roles-field .field-hint,
-.roles-field .field-error {
+.roles-field .field-error,
+.roles-field .field-warning {
   margin-bottom: 0;
 }
 

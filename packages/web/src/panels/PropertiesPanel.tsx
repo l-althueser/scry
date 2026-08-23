@@ -270,6 +270,18 @@ export function PropertiesPanel() {
   const selected = instances.filter((i) => selectedInstanceIds.includes(i.instanceId))
   const instance = selected.length === 1 ? selected[0] : undefined
 
+  // Doesn't block anything (unlike renameInstance's own live uniqueness
+  // check, which only guards a fresh rename) — a duplicate can still exist
+  // from an older/imported project, or two custom types sharing a tag
+  // prefix, and per CLAUDE.md's Node-RED contract, Node-RED's tag-discovery
+  // regex silently lets the last matching occurrence in the exported SVG
+  // text win on a collision rather than erroring, so this is worth flagging
+  // even though it might be intentional (e.g. deliberately sharing an
+  // "_indicator" tag isn't done this way — that's volumeTag on pipes).
+  const duplicateInstanceTagCount = instance
+    ? instances.filter((i) => i.tag === instance.tag).length
+    : 0
+
   const selectedPipes = pipes.filter((p) => selectedPipeIds.includes(p.instanceId))
   const pipe = selectedPipes.length === 1 ? selectedPipes[0] : undefined
 
@@ -1132,6 +1144,9 @@ export function PropertiesPanel() {
           />
         </label>
         {tagRenameError && <p className="field-error">{tagRenameError}</p>}
+        {!tagRenameError && duplicateInstanceTagCount > 1 && (
+          <p className="field-warning">Tag "{instance.tag}" is used by {duplicateInstanceTagCount} instances.</p>
+        )}
 
         <div className="field-row">
           <label className="field">
