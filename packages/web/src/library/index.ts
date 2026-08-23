@@ -9,6 +9,7 @@ import './gasCylinderComponent'
 import './flowMeterComponent'
 import './burstDiskComponent'
 import './reliefValveComponent'
+import './pressureReducerComponent'
 import './equipmentBoxComponent'
 // Runs after the built-ins above so custom types are registered last (moot in
 // practice — typeIds are prefixed to never collide — but keeps load order sane).
@@ -28,4 +29,5 @@ export { GAS_CYLINDER_TYPE } from './gasCylinderComponent'
 export { FLOW_METER_TYPE } from './flowMeterComponent'
 export { BURST_DISK_TYPE } from './burstDiskComponent'
 export { RELIEF_VALVE_TYPE } from './reliefValveComponent'
+export { PRESSURE_REDUCER_TYPE } from './pressureReducerComponent'
 export { EQUIPMENT_BOX_TYPE } from './equipmentBoxComponent'
