@@ -78,5 +78,5 @@ registerIconComponentType({
   // default label gap (24) assumes — without this the name label overlaps
   // the housing.
   labelStartY: HEIGHT + 0.5,
-  defaultEnabled: { indicator: true, name: false },
+  defaultEnabled: { indicator: false, name: false },
 })
