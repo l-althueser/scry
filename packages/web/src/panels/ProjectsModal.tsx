@@ -12,7 +12,6 @@ export function ProjectsModal({ onClose }: { onClose: () => void }) {
   const availableProjects = useProjectStore((s) => s.availableProjects)
   const projectName = useProjectStore((s) => s.projectName)
   const serverBusy = useProjectStore((s) => s.serverBusy)
-  const serverStatus = useProjectStore((s) => s.serverStatus)
   const loadProjectFromServer = useProjectStore((s) => s.loadProjectFromServer)
   const renameProjectOnServer = useProjectStore((s) => s.renameProjectOnServer)
   const duplicateProjectOnServer = useProjectStore((s) => s.duplicateProjectOnServer)
@@ -92,7 +91,6 @@ export function ProjectsModal({ onClose }: { onClose: () => void }) {
           Open, rename, duplicate, or delete a saved project. Deleting keeps the file on the server
           (just hidden here) — nothing is permanently destroyed.
         </p>
-        {serverStatus && <p className="field-hint">{serverStatus}</p>}
 
         <ul className="layer-list">
           {availableProjects.length === 0 && <p className="field-hint">No projects saved on the server yet.</p>}

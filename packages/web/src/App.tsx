@@ -172,6 +172,7 @@ export default function App() {
   const projectName = useProjectStore((s) => s.projectName)
   const setProjectName = useProjectStore((s) => s.setProjectName)
   const serverStatus = useProjectStore((s) => s.serverStatus)
+  const serverStatusKind = useProjectStore((s) => s.serverStatusKind)
   const serverBusy = useProjectStore((s) => s.serverBusy)
   const loadInitialProject = useProjectStore((s) => s.loadInitialProject)
   const saveProjectToServer = useProjectStore((s) => s.saveProjectToServer)
@@ -194,8 +195,13 @@ export default function App() {
 
   const [libraryEditorOpen, setLibraryEditorOpen] = useState(false)
   const [projectsModalOpen, setProjectsModalOpen] = useState(false)
+  const [importExportMenuOpen, setImportExportMenuOpen] = useState(false)
+  const [errorToast, setErrorToast] = useState<string | null>(null)
   const importFileInputRef = useRef<HTMLInputElement>(null)
   const canvasViewRef = useRef<CanvasViewHandle>(null)
+  const importExportMenuRef = useRef<HTMLDivElement>(null)
+  const lastShownErrorRef = useRef<string | null>(null)
+  const errorToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -226,6 +232,33 @@ export default function App() {
   useEffect(() => {
     loadInitialProject()
   }, [loadInitialProject])
+
+  const ERROR_TOAST_DURATION_MS = 6000
+  // Surfaces one-off action failures (save/load/rename/duplicate/delete/
+  // restore/export) as a self-dismissing toast — these have no other visible
+  // feedback (unlike autosave, which the sync badge already covers). Keyed
+  // off the message text (not just serverStatusKind flipping to 'error') so
+  // the same failure repeating in a row still restarts the timer instead of
+  // silently no-opping.
+  useEffect(() => {
+    if (serverStatusKind !== 'error' || !serverStatus) return
+    if (serverStatus === lastShownErrorRef.current) return
+    lastShownErrorRef.current = serverStatus
+    setErrorToast(serverStatus)
+    if (errorToastTimerRef.current) clearTimeout(errorToastTimerRef.current)
+    errorToastTimerRef.current = setTimeout(() => setErrorToast(null), ERROR_TOAST_DURATION_MS)
+  }, [serverStatus, serverStatusKind])
+
+  useEffect(() => {
+    if (!importExportMenuOpen) return
+    function onPointerDown(evt: PointerEvent) {
+      if (importExportMenuRef.current && !importExportMenuRef.current.contains(evt.target as Node)) {
+        setImportExportMenuOpen(false)
+      }
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => window.removeEventListener('pointerdown', onPointerDown)
+  }, [importExportMenuOpen])
 
   useEffect(() => {
     function onKeyDown(evt: KeyboardEvent) {
@@ -549,15 +582,6 @@ export default function App() {
           >
             Redo
           </button>
-          <button
-            className="tool-button"
-            disabled={instanceCount === 0 && pipes.length === 0 && freeShapes.length === 0}
-            onClick={() =>
-              downloadSvgFile('export.svg', exportProjectToSvg(instances, pipes, freeShapes, layers, leaderLines))
-            }
-          >
-            Export SVG
-          </button>
         </div>
       </header>
       <div className="app-project-bar">
@@ -579,9 +603,6 @@ export default function App() {
         <button className="tool-button" onClick={() => setProjectsModalOpen(true)}>
           Projects&hellip;
         </button>
-        <button className="tool-button" onClick={() => importFileInputRef.current?.click()}>
-          Import&hellip;
-        </button>
         <input
           ref={importFileInputRef}
           type="file"
@@ -589,21 +610,63 @@ export default function App() {
           style={{ display: 'none' }}
           onChange={handleImportFile}
         />
-        <button
-          className="tool-button"
-          disabled={instanceCount === 0 && pipes.length === 0 && freeShapes.length === 0}
-          onClick={() => exportProjectToFile()}
-        >
-          Export project&hellip;
-        </button>
-        <button
-          className="tool-button"
-          disabled={serverBusy || (instanceCount === 0 && pipes.length === 0 && freeShapes.length === 0)}
-          onClick={() => exportToServer()}
-        >
-          Export to server
-        </button>
-        {serverStatus && <span className="server-status">{serverStatus}</span>}
+        <div className="dropdown-menu" ref={importExportMenuRef}>
+          <button
+            className="tool-button"
+            aria-haspopup="menu"
+            aria-expanded={importExportMenuOpen}
+            onClick={() => setImportExportMenuOpen((open) => !open)}
+          >
+            Import / Export&hellip; ▾
+          </button>
+          {importExportMenuOpen && (
+            <div className="dropdown-menu-panel" role="menu">
+              <button
+                className="dropdown-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setImportExportMenuOpen(false)
+                  importFileInputRef.current?.click()
+                }}
+              >
+                Import project file&hellip;
+              </button>
+              <button
+                className="dropdown-menu-item"
+                role="menuitem"
+                disabled={instanceCount === 0 && pipes.length === 0 && freeShapes.length === 0}
+                onClick={() => {
+                  setImportExportMenuOpen(false)
+                  exportProjectToFile()
+                }}
+              >
+                Export project to file&hellip;
+              </button>
+              <button
+                className="dropdown-menu-item"
+                role="menuitem"
+                disabled={serverBusy || (instanceCount === 0 && pipes.length === 0 && freeShapes.length === 0)}
+                onClick={() => {
+                  setImportExportMenuOpen(false)
+                  exportToServer()
+                }}
+              >
+                Export SVG to server
+              </button>
+              <button
+                className="dropdown-menu-item"
+                role="menuitem"
+                disabled={instanceCount === 0 && pipes.length === 0 && freeShapes.length === 0}
+                onClick={() => {
+                  setImportExportMenuOpen(false)
+                  downloadSvgFile('export.svg', exportProjectToSvg(instances, pipes, freeShapes, layers, leaderLines))
+                }}
+              >
+                Download SVG&hellip;
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       {syncStatus === 'conflict' && (
         <div className="conflict-banner">
@@ -650,6 +713,21 @@ export default function App() {
       </footer>
       {libraryEditorOpen && <LibraryEditorModal onClose={() => setLibraryEditorOpen(false)} />}
       {projectsModalOpen && <ProjectsModal onClose={() => setProjectsModalOpen(false)} />}
+      {errorToast && (
+        <div className="error-toast" role="alert">
+          <span>{errorToast}</span>
+          <button
+            className="error-toast-close"
+            aria-label="Dismiss"
+            onClick={() => {
+              if (errorToastTimerRef.current) clearTimeout(errorToastTimerRef.current)
+              setErrorToast(null)
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -758,6 +758,8 @@ interface ProjectState {
   projectName: string
   availableProjects: string[]
   serverStatus: string | null
+  /** 'error' when serverStatus is a failure message — drives the toast in App.tsx. Success messages are kept in serverStatus for debugging but aren't shown anywhere. */
+  serverStatusKind: 'error' | null
   serverBusy: boolean
 
   /**
@@ -1010,6 +1012,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   projectName: readLastProjectName(),
   availableProjects: [],
   serverStatus: null,
+  serverStatusKind: null,
   serverBusy: false,
   syncStatus: 'unsaved',
   projectMeta: null,
@@ -2534,7 +2537,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const projects = await api.listProjects()
       set({ availableProjects: projects })
     } catch (err) {
-      set({ serverStatus: `Failed to list projects: ${(err as Error).message}` })
+      set({ serverStatus: `Failed to list projects: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
@@ -2558,7 +2561,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         await get().loadProjectFromServer(get().projectName)
       }
     } catch (err) {
-      set({ serverStatus: `Failed to list projects: ${(err as Error).message}` })
+      set({ serverStatus: `Failed to list projects: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
@@ -2568,7 +2571,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   saveProjectToServer: async () => {
     cancelPendingAutosave()
     const state = get()
-    set({ serverBusy: true, serverStatus: null, syncStatus: 'saving' })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null, syncStatus: 'saving' })
     try {
       const snapshot = buildProjectSnapshot(
         state.projectName,
@@ -2595,6 +2598,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({
         serverBusy: false,
         serverStatus: `Save failed: ${(err as Error).message}`,
+        serverStatusKind: 'error',
         syncStatus: 'error',
         syncErrorMessage: (err as Error).message,
       })
@@ -2603,7 +2607,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   loadProjectFromServer: async (name) => {
     cancelPendingAutosave()
-    set({ serverBusy: true, serverStatus: null })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null })
     try {
       const project = await api.loadProject(name)
       resyncCounters(project.instances, project.pipes)
@@ -2642,24 +2646,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         syncErrorMessage: null,
       })
     } catch (err) {
-      set({ serverBusy: false, serverStatus: `Load failed: ${(err as Error).message}` })
+      set({ serverBusy: false, serverStatus: `Load failed: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
   exportToServer: async () => {
     const state = get()
-    set({ serverBusy: true, serverStatus: null })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null })
     try {
       const svg = exportProjectToSvg(state.instances, state.pipes, state.freeShapes, state.layers, state.leaderLines)
       await api.exportToServer(state.projectName, svg)
       set({ serverBusy: false, serverStatus: `Exported "${state.projectName}.svg" to the server.` })
     } catch (err) {
-      set({ serverBusy: false, serverStatus: `Server export failed: ${(err as Error).message}` })
+      set({ serverBusy: false, serverStatus: `Server export failed: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
   renameProjectOnServer: async (oldName, newName) => {
-    set({ serverBusy: true, serverStatus: null })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null })
     try {
       await api.renameProject(oldName, newName)
       const projects = await api.listProjects()
@@ -2674,23 +2678,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             : state.projectMeta,
       }))
     } catch (err) {
-      set({ serverBusy: false, serverStatus: `Rename failed: ${(err as Error).message}` })
+      set({ serverBusy: false, serverStatus: `Rename failed: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
   duplicateProjectOnServer: async (name, newName) => {
-    set({ serverBusy: true, serverStatus: null })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null })
     try {
       await api.duplicateProject(name, newName)
       const projects = await api.listProjects()
       set({ serverBusy: false, serverStatus: `Duplicated "${name}" as "${newName}".`, availableProjects: projects })
     } catch (err) {
-      set({ serverBusy: false, serverStatus: `Duplicate failed: ${(err as Error).message}` })
+      set({ serverBusy: false, serverStatus: `Duplicate failed: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
   trashProjectOnServer: async (name) => {
-    set({ serverBusy: true, serverStatus: null })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null })
     try {
       await api.trashProject(name)
       const projects = await api.listProjects()
@@ -2711,7 +2715,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }
       })
     } catch (err) {
-      set({ serverBusy: false, serverStatus: `Delete failed: ${(err as Error).message}` })
+      set({ serverBusy: false, serverStatus: `Delete failed: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 
@@ -2769,6 +2773,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       serverStatus: overwriteCurrent
         ? `Imported "${project.meta?.name ?? 'file'}" into "${state.projectName}".`
         : `Imported "${project.meta?.name ?? 'project'}" from file.`,
+      serverStatusKind: null,
     }))
   },
 
@@ -2788,12 +2793,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const versions = await api.listProjectVersions(name)
       set({ versions, versionsLoading: false })
     } catch (err) {
-      set({ versionsLoading: false, serverStatus: `Failed to load version history: ${(err as Error).message}` })
+      set({
+        versionsLoading: false,
+        serverStatus: `Failed to load version history: ${(err as Error).message}`,
+        serverStatusKind: 'error',
+      })
     }
   },
 
   restoreProjectVersion: async (name, timestamp) => {
-    set({ serverBusy: true, serverStatus: null })
+    set({ serverBusy: true, serverStatus: null, serverStatusKind: null })
     try {
       await api.restoreProjectVersion(name, timestamp)
       if (get().projectName === name) {
@@ -2803,7 +2812,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const versions = await api.listProjectVersions(name)
       set({ serverBusy: false, serverStatus: `Restored version from ${new Date(timestamp).toLocaleString()}.`, versions })
     } catch (err) {
-      set({ serverBusy: false, serverStatus: `Restore failed: ${(err as Error).message}` })
+      set({ serverBusy: false, serverStatus: `Restore failed: ${(err as Error).message}`, serverStatusKind: 'error' })
     }
   },
 }))
