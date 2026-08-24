@@ -675,7 +675,7 @@ function snapshotOf(
 
 
 /** Letters, then optional digits — a practical subset of the tag pattern documented in .claude/CLAUDE.md. */
-const TAG_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/
+export const TAG_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/
 
 export interface RoleSelection {
   instanceId: string
@@ -718,6 +718,12 @@ interface ProjectState {
   selectedGroupId: string | null
   /** Drives the layers list view in the (right) properties panel — toggled from a toolbar button, since there's no dedicated left-hand layers panel anymore. */
   layersPanelOpen: boolean
+  /** Drives the tag-search view in the (right) properties panel, same convention as layersPanelOpen. */
+  searchPanelOpen: boolean
+  /** Persisted (not the result list itself — that's derived live from this + current instances/pipes) so reopening the panel shows the same search. */
+  searchQuery: string
+  searchRegexPattern: string
+  searchRegexReplacement: string
   /** Shared by the width/height panel fields and the canvas corner-drag handles, so both respect the same lock. */
   imageAspectLocked: boolean
   tool: Tool
@@ -933,6 +939,15 @@ interface ProjectState {
   /** Closes the layers list view and deselects any layer whose settings were showing. */
   closeLayersPanel: () => void
   toggleLayersPanel: () => void
+  /** Opens the tag-search view (clearing any other selection) — e.g. from the toolbar button. */
+  openSearchPanel: () => void
+  closeSearchPanel: () => void
+  toggleSearchPanel: () => void
+  setSearchQuery: (query: string) => void
+  setSearchRegexPattern: (pattern: string) => void
+  setSearchRegexReplacement: (replacement: string) => void
+  /** Applies an already-validated batch of tag renames (see previewRegexRename in search/tagSearch.ts) as one undo step. */
+  bulkRenameTagsByRegex: (matches: { kind: 'instance' | 'pipe'; id: string; newTag: string }[]) => void
   setImageAspectLocked: (locked: boolean) => void
   /** keepPlacing is true when Shift was held, so the tool stays active for placing several points in a row. */
   addConnectionPoint: (layerId: string, relX: number, relY: number, keepPlacing?: boolean) => void
@@ -994,6 +1009,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   groups: [],
   selectedGroupId: null,
   layersPanelOpen: false,
+  searchPanelOpen: false,
+  searchQuery: '',
+  searchRegexPattern: '',
+  searchRegexReplacement: '',
   imageAspectLocked: true,
   tool: 'select',
   placingType: null,
@@ -2533,6 +2552,48 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (state.layersPanelOpen || state.selectedLayerId) get().closeLayersPanel()
     else get().openLayersPanel()
   },
+
+  openSearchPanel: () =>
+    set({
+      searchPanelOpen: true,
+      selectedLayerId: null,
+      selectedInstanceIds: [],
+      selectedPipeIds: [],
+      selectedShapeIds: [],
+      selectedLeaderLineIds: [],
+      selectedLeaderLinePoint: null,
+      selectedGroupId: null,
+      selectedRole: null,
+      selectedWaypoint: null,
+      tagRenameError: null,
+    }),
+
+  closeSearchPanel: () => set({ searchPanelOpen: false }),
+
+  toggleSearchPanel: () => {
+    const state = get()
+    if (state.searchPanelOpen) get().closeSearchPanel()
+    else get().openSearchPanel()
+  },
+
+  setSearchQuery: (query) => set({ searchQuery: query }),
+  setSearchRegexPattern: (pattern) => set({ searchRegexPattern: pattern }),
+  setSearchRegexReplacement: (replacement) => set({ searchRegexReplacement: replacement }),
+
+  bulkRenameTagsByRegex: (matches) =>
+    set((state) => {
+      if (matches.length === 0) return {}
+      const byInstance = new Map(matches.filter((m) => m.kind === 'instance').map((m) => [m.id, m.newTag]))
+      const byPipe = new Map(matches.filter((m) => m.kind === 'pipe').map((m) => [m.id, m.newTag]))
+      return {
+        ...pushHistory(state),
+        tagRenameError: null,
+        instances: state.instances.map((inst) =>
+          byInstance.has(inst.instanceId) ? { ...inst, tag: byInstance.get(inst.instanceId)! } : inst,
+        ),
+        pipes: state.pipes.map((p) => (byPipe.has(p.instanceId) ? { ...p, tag: byPipe.get(p.instanceId)! } : p)),
+      }
+    }),
 
   setImageAspectLocked: (locked) => set({ imageAspectLocked: locked }),
 

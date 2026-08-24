@@ -520,6 +520,13 @@ export class SvgCanvas {
     this.svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`)
   }
 
+  /** Recenters the canvas on a world-space point at the current zoom level (no auto-zoom) — used by tag search's "jump to result". */
+  focusOnWorldPoint(point: Point) {
+    this.viewBox = { ...this.viewBox, x: point.x - this.viewBox.w / 2, y: point.y - this.viewBox.h / 2 }
+    this.applyViewBox()
+    this.drawGrid()
+  }
+
   snapToGrid(pt: Point): Point {
     return {
       x: Math.round(pt.x / this.gridSize) * this.gridSize,

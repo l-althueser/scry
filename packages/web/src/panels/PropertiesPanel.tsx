@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useProjectStore } from '../state/projectStore'
+import { useProjectStore, TAG_PATTERN } from '../state/projectStore'
+import {
+  previewRegexRename,
+  resolveSearchResultWorldPoint,
+  searchTags,
+  type RegexRenamePreviewRow,
+  type TagSearchResult,
+} from '../search/tagSearch'
 import {
   computeCrossingsForPipe,
   computeDefaultArrowRotation,
@@ -60,6 +67,60 @@ function ColorPickerRow({
         Default
       </button>
     </div>
+  )
+}
+
+/**
+ * One tag-search result row: click focuses the canvas on it (stays in
+ * search mode), double-click selects it (leaves search mode — see the
+ * search-mode branch in PropertiesPanel). Its own small inline rename
+ * control lets a single tag be fixed without leaving the list; on submit
+ * the row naturally drops out of the (live-derived) result list if the new
+ * tag no longer matches the current query, same as any live filter.
+ */
+function SearchResultRow({
+  result,
+  onFocus,
+  onSelect,
+  onRename,
+}: {
+  result: TagSearchResult
+  onFocus: () => void
+  onSelect: () => void
+  onRename: (newTag: string) => void
+}) {
+  const [renameInput, setRenameInput] = useState(result.tag)
+  useEffect(() => setRenameInput(result.tag), [result.tag])
+
+  return (
+    <li className="layer-row">
+      <button
+        className="layer-name-button"
+        onClick={onFocus}
+        onDoubleClick={onSelect}
+        title="Click to focus the canvas on it, double-click to select it"
+      >
+        {result.tag} <span className="field-hint">({result.kind === 'pipe' ? 'pipe' : 'component'})</span>
+      </button>
+      <div className="layer-row-buttons">
+        <input
+          className="project-name-input"
+          style={{ width: '7rem' }}
+          value={renameInput}
+          onChange={(e) => setRenameInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && renameInput.trim() && renameInput !== result.tag) onRename(renameInput.trim())
+          }}
+        />
+        <button
+          className="tool-button"
+          disabled={!renameInput.trim() || renameInput === result.tag}
+          onClick={() => onRename(renameInput.trim())}
+        >
+          Rename
+        </button>
+      </div>
+    </li>
   )
 }
 
@@ -194,7 +255,7 @@ function SelectionStylePanel({
   )
 }
 
-export function PropertiesPanel() {
+export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Point) => void }) {
   const selectedInstanceIds = useProjectStore((s) => s.selectedInstanceIds)
   const instances = useProjectStore((s) => s.instances)
   const selectedPipeIds = useProjectStore((s) => s.selectedPipeIds)
@@ -266,6 +327,17 @@ export function PropertiesPanel() {
   const deleteConnectionPoint = useProjectStore((s) => s.deleteConnectionPoint)
   const setTool = useProjectStore((s) => s.setTool)
   const checkpointHistory = useProjectStore((s) => s.checkpointHistory)
+  const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
+  const closeSearchPanel = useProjectStore((s) => s.closeSearchPanel)
+  const searchQuery = useProjectStore((s) => s.searchQuery)
+  const setSearchQuery = useProjectStore((s) => s.setSearchQuery)
+  const searchRegexPattern = useProjectStore((s) => s.searchRegexPattern)
+  const setSearchRegexPattern = useProjectStore((s) => s.setSearchRegexPattern)
+  const searchRegexReplacement = useProjectStore((s) => s.searchRegexReplacement)
+  const setSearchRegexReplacement = useProjectStore((s) => s.setSearchRegexReplacement)
+  const bulkRenameTagsByRegex = useProjectStore((s) => s.bulkRenameTagsByRegex)
+  const selectInstances = useProjectStore((s) => s.selectInstances)
+  const selectPipes = useProjectStore((s) => s.selectPipes)
 
   const selected = instances.filter((i) => selectedInstanceIds.includes(i.instanceId))
   const instance = selected.length === 1 ? selected[0] : undefined
@@ -291,6 +363,29 @@ export function PropertiesPanel() {
   const selectedLeaderLines = leaderLines.filter((l) => selectedLeaderLineIds.includes(l.instanceId))
 
   const selectedLayer = layers.find((l) => l.layerId === selectedLayerId)
+
+  // Computed unconditionally (not inside the search-mode branch below) so
+  // this stays a plain hook call every render, same as every other useMemo
+  // in this component — React's rules of hooks don't allow a hook call to
+  // become conditional across renders, which a branch-local useMemo would.
+  const searchResults = useMemo(
+    () => searchTags(searchQuery, instances, pipes),
+    [searchQuery, instances, pipes],
+  )
+  const regexPreview: RegexRenamePreviewRow[] | { error: string } | null = useMemo(() => {
+    if (!searchRegexPattern) return null
+    const renamedIds = new Set(searchResults.map((r) => r.id))
+    const otherInstanceTags = instances.filter((i) => !renamedIds.has(i.instanceId)).map((i) => i.tag)
+    const otherPipeTags = pipes.filter((p) => !renamedIds.has(p.instanceId)).map((p) => p.tag)
+    return previewRegexRename(
+      searchResults,
+      searchRegexPattern,
+      searchRegexReplacement,
+      otherInstanceTags,
+      otherPipeTags,
+      TAG_PATTERN,
+    )
+  }, [searchResults, searchRegexPattern, searchRegexReplacement, instances, pipes])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -1020,6 +1115,119 @@ export function PropertiesPanel() {
           </button>
         </div>
         <ShortcutHint items={[SHORTCUT.deleteOne, SHORTCUT.deselect]} />
+      </aside>
+    )
+  }
+
+  if (searchPanelOpen && selected.length === 0 && selectedPipes.length === 0) {
+    return (
+      <aside className="properties-panel">
+        <div className="field-row properties-panel-header">
+          <h2>Search tags</h2>
+          <button className="tool-button" title="Close" onClick={() => closeSearchPanel()}>
+            &times;
+          </button>
+        </div>
+
+        <div className="field-row">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search tag (e.g. HV208 or HV)"
+            autoFocus
+          />
+        </div>
+        {searchQuery.trim() && (
+          <p className="field-hint">
+            {searchResults.length} match{searchResults.length === 1 ? '' : 'es'}
+          </p>
+        )}
+
+        <ul className="layer-list">
+          {searchResults.map((result) => (
+            <SearchResultRow
+              key={`${result.kind}-${result.id}`}
+              result={result}
+              onFocus={() => {
+                const point = resolveSearchResultWorldPoint(result, instances, pipes, layers)
+                if (point) onFocusResult(point)
+              }}
+              onSelect={() => {
+                closeSearchPanel()
+                if (result.kind === 'instance') selectInstances([result.id])
+                else selectPipes([result.id])
+              }}
+              onRename={(newTag) => {
+                if (result.kind === 'instance') renameInstance(result.id, newTag)
+                else renamePipeTag(result.id, newTag)
+              }}
+            />
+          ))}
+        </ul>
+
+        <fieldset className="field roles-field">
+          <legend>
+            Regex rename
+            <InfoIcon text="Applies to the tags currently listed above only — search first to narrow the scope, then replace across all of them at once." />
+          </legend>
+          <div className="field-row">
+            <label className="field">
+              <span>Pattern</span>
+              <input
+                type="text"
+                value={searchRegexPattern}
+                onChange={(e) => setSearchRegexPattern(e.target.value)}
+                placeholder="HV"
+              />
+            </label>
+            <label className="field">
+              <span>Replacement</span>
+              <input
+                type="text"
+                value={searchRegexReplacement}
+                onChange={(e) => setSearchRegexReplacement(e.target.value)}
+                placeholder="MV"
+              />
+            </label>
+          </div>
+
+          {regexPreview && 'error' in regexPreview && <p className="field-error">{regexPreview.error}</p>}
+
+          {regexPreview && Array.isArray(regexPreview) && regexPreview.length > 0 && (
+            <>
+              <ul className="layer-list">
+                {regexPreview.map((row) => (
+                  <li key={`${row.kind}-${row.id}`} className="layer-row">
+                    <span className="layer-name-button" style={{ cursor: 'default' }}>
+                      {row.oldTag} → {row.newTag}{' '}
+                      {row.status === 'invalid-format' && <span className="field-error">invalid tag format</span>}
+                      {row.status === 'collision' && <span className="field-error">collides with another tag</span>}
+                      {row.status === 'unchanged' && <span className="field-hint">unchanged</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="tool-button"
+                disabled={
+                  !regexPreview.some((r) => r.status === 'ok') ||
+                  regexPreview.some((r) => r.status === 'invalid-format' || r.status === 'collision')
+                }
+                onClick={() =>
+                  bulkRenameTagsByRegex(
+                    regexPreview
+                      .filter((r) => r.status === 'ok')
+                      .map((r) => ({ kind: r.kind, id: r.id, newTag: r.newTag })),
+                  )
+                }
+              >
+                Apply to {regexPreview.filter((r) => r.status === 'ok').length} tag
+                {regexPreview.filter((r) => r.status === 'ok').length === 1 ? '' : 's'}
+              </button>
+            </>
+          )}
+        </fieldset>
       </aside>
     )
   }

@@ -152,6 +152,9 @@ export default function App() {
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const toggleLayersPanel = useProjectStore((s) => s.toggleLayersPanel)
   const closeLayersPanel = useProjectStore((s) => s.closeLayersPanel)
+  const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
+  const toggleSearchPanel = useProjectStore((s) => s.toggleSearchPanel)
+  const closeSearchPanel = useProjectStore((s) => s.closeSearchPanel)
   const deleteLayer = useProjectStore((s) => s.deleteLayer)
   const selectInstances = useProjectStore((s) => s.selectInstances)
   const selectRole = useProjectStore((s) => s.selectRole)
@@ -331,6 +334,8 @@ export default function App() {
           selectInstances([])
         } else if (selectedLayerId || layersPanelOpen) {
           closeLayersPanel()
+        } else if (searchPanelOpen) {
+          closeSearchPanel()
         }
         return
       }
@@ -390,6 +395,8 @@ export default function App() {
     selectedGroupId,
     selectedLayerId,
     layersPanelOpen,
+    searchPanelOpen,
+    closeSearchPanel,
     cancelTool,
     selectInstances,
     selectRole,
@@ -552,6 +559,19 @@ export default function App() {
             Image layers
           </button>
           <button
+            className={searchPanelOpen ? 'tool-button icon-button active' : 'tool-button icon-button'}
+            onClick={() => toggleSearchPanel()}
+            title="Search tags: find components/pipes by tag, jump to them, and rename or regex-replace tags in bulk. Opens in the properties panel."
+          >
+            <span className="component-icon" aria-hidden="true">
+              <svg viewBox="0 0 28 28">
+                <circle cx="12" cy="12" r="7" fill="none" stroke="#000000" strokeWidth="2.2" />
+                <path d="M17 17 L23 23" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" />
+              </svg>
+            </span>
+            Search
+          </button>
+          <button
             className={libraryEditorOpen ? 'tool-button icon-button active' : 'tool-button icon-button'}
             onClick={() => setLibraryEditorOpen(true)}
             title="Component library: define your own component types (geometry, ports, roles) instead of relying only on the built-in ones."
@@ -697,7 +717,7 @@ export default function App() {
       )}
       <div className="app-body">
         <CanvasView ref={canvasViewRef} />
-        <PropertiesPanel />
+        <PropertiesPanel onFocusResult={(point) => canvasViewRef.current?.focusOnWorldPoint(point)} />
       </div>
       <footer className="app-statusbar">
         <span>

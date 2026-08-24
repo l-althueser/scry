@@ -1,10 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { SvgCanvas } from './SvgCanvas'
+import { SvgCanvas, type Point } from './SvgCanvas'
 import { useProjectStore } from '../state/projectStore'
 
 export interface CanvasViewHandle {
   /** Forwards to the underlying SvgCanvas's clearEnteredGroup — see App.tsx's Escape handler. */
   clearEnteredGroup: () => void
+  /** Forwards to SvgCanvas.focusOnWorldPoint — see tag search's "jump to result". */
+  focusOnWorldPoint: (point: Point) => void
 }
 
 export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_props, ref) {
@@ -13,6 +15,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
 
   useImperativeHandle(ref, () => ({
     clearEnteredGroup: () => canvasRef.current?.clearEnteredGroup(),
+    focusOnWorldPoint: (point) => canvasRef.current?.focusOnWorldPoint(point),
   }))
 
   const instances = useProjectStore((s) => s.instances)
