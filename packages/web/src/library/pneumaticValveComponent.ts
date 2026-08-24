@@ -29,5 +29,8 @@ registerIconComponentType({
     { portId: 'out', x: 34.02, y: 8.5, exitAngleDeg: 0 },
   ],
   centerX: 17.01,
+  // Body's bottom edge sits at y=17.01 (see localBodyCorners above) — same
+  // near-flush label gap as the manual valve (HV), see valveComponent.ts.
+  labelStartY: 17.5,
   defaultEnabled: { indicator: true, name: true },
 })
