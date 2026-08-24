@@ -77,7 +77,14 @@ export interface Point {
   y: number
 }
 
-export type Tool = 'select' | 'place' | 'draw-pipe' | 'draw-shape' | 'place-connection-point' | 'draw-leader-line'
+export type Tool =
+  | 'select'
+  | 'place'
+  | 'draw-pipe'
+  | 'draw-shape'
+  | 'place-connection-point'
+  | 'draw-leader-line'
+  | 'pick-transparent-color'
 
 export interface RoleSelection {
   instanceId: string
@@ -168,6 +175,8 @@ export interface SvgCanvasCallbacks {
   onLayerResized: (layerId: string, rect: { x: number; y: number; width: number; height: number }) => void
   /** relX/relY are fractions of the image's current width/height, so the point stays put relative to the image through later drags/resizes. keepPlacing mirrors the other tools' Shift convention. */
   onConnectionPointAdded: (layerId: string, relX: number, relY: number, keepPlacing: boolean) => void
+  /** relX/relY are fractions of the image's current width/height, same convention as onConnectionPointAdded — the store resolves the actual pixel color and reprocesses the image. */
+  onTransparentColorPicked: (layerId: string, relX: number, relY: number) => void
 
   /** keepDrawing is true when Shift was held, so the tool stays active for drawing several leader lines in a row. */
   onLeaderLineAdded: (from: LeaderLineEndpoint, waypoints: Point[], to: LeaderLineEndpoint, keepDrawing: boolean) => void
@@ -456,12 +465,14 @@ export class SvgCanvas {
   private placingType: string | null = null
   private drawingShapeKind: FreeShapeKind | null = null
   private connectionPointTargetLayerId: string | null = null
+  private pickTransparentColorTargetLayerId: string | null = null
 
   setTool(tool: Tool, subKind: string | null = null) {
     this.tool = tool
     this.placingType = tool === 'place' ? subKind : null
     this.drawingShapeKind = tool === 'draw-shape' ? (subKind as FreeShapeKind | null) : null
     this.connectionPointTargetLayerId = tool === 'place-connection-point' ? subKind : null
+    this.pickTransparentColorTargetLayerId = tool === 'pick-transparent-color' ? subKind : null
     this.svg.style.cursor = tool === 'select' ? 'default' : 'crosshair'
     if (tool !== 'place') {
       this.hidePreview()
@@ -1510,6 +1521,16 @@ export class SvgCanvas {
         const relX = clamp01((world.x - layer.x) / layer.width)
         const relY = clamp01((world.y - layer.y) / layer.height)
         this.callbacks.onConnectionPointAdded(layer.layerId, relX, relY, evt.shiftKey)
+      }
+      return
+    }
+
+    if (this.tool === 'pick-transparent-color' && this.pickTransparentColorTargetLayerId) {
+      const layer = this.latestLayers.find((l) => l.layerId === this.pickTransparentColorTargetLayerId)
+      if (layer && layer.kind === 'image' && layer.width > 0 && layer.height > 0) {
+        const relX = clamp01((world.x - layer.x) / layer.width)
+        const relY = clamp01((world.y - layer.y) / layer.height)
+        this.callbacks.onTransparentColorPicked(layer.layerId, relX, relY)
       }
       return
     }

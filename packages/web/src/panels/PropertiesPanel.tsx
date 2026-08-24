@@ -327,6 +327,9 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const closeLayersPanel = useProjectStore((s) => s.closeLayersPanel)
   const deleteConnectionPoint = useProjectStore((s) => s.deleteConnectionPoint)
   const setTool = useProjectStore((s) => s.setTool)
+  const tool = useProjectStore((s) => s.tool)
+  const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
+  const restoreOriginalImage = useProjectStore((s) => s.restoreOriginalImage)
   const checkpointHistory = useProjectStore((s) => s.checkpointHistory)
   const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
   const closeSearchPanel = useProjectStore((s) => s.closeSearchPanel)
@@ -1001,6 +1004,26 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
             />
             show grid over this image
           </label>
+
+          <div className="field-row">
+            <button
+              onClick={() => setTool('pick-transparent-color', layer.layerId)}
+              title="Click, then click a pixel on the image — that exact color becomes transparent everywhere in the image, same as PowerPoint's 'Set Transparent Color' (e.g. removing a white background)."
+            >
+              Set transparent color
+            </button>
+            {layer.originalSrc && (
+              <button
+                onClick={() => restoreOriginalImage(layer.layerId)}
+                title="Undo every 'Set transparent color' edit and go back to the originally imported image."
+              >
+                Restore original image
+              </button>
+            )}
+          </div>
+          {tool === 'pick-transparent-color' && pickTransparentColorTargetLayerId === layer.layerId && (
+            <p className="field-hint">Click a pixel on the image to make that color transparent…</p>
+          )}
 
           <label className="field">
             <span>Opacity ({Math.round(layer.opacity * 100)}%)</span>

@@ -28,6 +28,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const placingType = useProjectStore((s) => s.placingType)
   const drawingShapeKind = useProjectStore((s) => s.drawingShapeKind)
   const connectionPointTargetLayerId = useProjectStore((s) => s.connectionPointTargetLayerId)
+  const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
   const gridSize = useProjectStore((s) => s.gridSize)
   const selectedInstanceIds = useProjectStore((s) => s.selectedInstanceIds)
   const selectedRole = useProjectStore((s) => s.selectedRole)
@@ -67,6 +68,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const moveImageLayer = useProjectStore((s) => s.moveImageLayer)
   const resizeImageLayer = useProjectStore((s) => s.resizeImageLayer)
   const addConnectionPoint = useProjectStore((s) => s.addConnectionPoint)
+  const pickTransparentColorAt = useProjectStore((s) => s.pickTransparentColorAt)
   const selectMixed = useProjectStore((s) => s.selectMixed)
   const selectGroup = useProjectStore((s) => s.selectGroup)
 
@@ -107,6 +109,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
       onLayerResized: (layerId, rect) => resizeImageLayer(layerId, rect),
       onConnectionPointAdded: (layerId, relX, relY, keepPlacing) =>
         addConnectionPoint(layerId, relX, relY, keepPlacing),
+      onTransparentColorPicked: (layerId, relX, relY) => void pickTransparentColorAt(layerId, relX, relY),
     })
     canvasRef.current = canvas
 
@@ -137,10 +140,12 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   }, [layers])
 
   useEffect(() => {
-    const subKind =
-      tool === 'draw-shape' ? drawingShapeKind : tool === 'place-connection-point' ? connectionPointTargetLayerId : placingType
+    let subKind = placingType
+    if (tool === 'draw-shape') subKind = drawingShapeKind
+    else if (tool === 'place-connection-point') subKind = connectionPointTargetLayerId
+    else if (tool === 'pick-transparent-color') subKind = pickTransparentColorTargetLayerId
     canvasRef.current?.setTool(tool, subKind)
-  }, [tool, placingType, drawingShapeKind, connectionPointTargetLayerId])
+  }, [tool, placingType, drawingShapeKind, connectionPointTargetLayerId, pickTransparentColorTargetLayerId])
 
   useEffect(() => {
     canvasRef.current?.setSelection(selectedInstanceIds)

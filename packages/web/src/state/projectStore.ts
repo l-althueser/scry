@@ -32,6 +32,7 @@ import type { Tool, Point } from '../canvas/SvgCanvas'
 import * as api from '../api/client'
 import { exportProjectToSvg } from '../export/svgExport'
 import { downloadTextFile } from '../export/downloadFile'
+import { applyTransparentColor, samplePixelColor } from '../import/imageTransparency'
 import { computePipeVolumeGroups, expandToVolumeSiblings } from '../pipes/pipeVolumes'
 import {
   detachPipesFromInstances,
@@ -730,6 +731,8 @@ interface ProjectState {
   placingType: string | null
   drawingShapeKind: FreeShapeKind | null
   connectionPointTargetLayerId: string | null
+  /** Non-null while the "pick transparent color" eyedropper tool is armed for an image layer — see pickTransparentColorAt. */
+  pickTransparentColorTargetLayerId: string | null
   gridSize: number
   tagRenameError: string | null
   /** Set when autoRoutePipe fails to find an obstacle-free path (e.g. fully boxed in); cleared on the next successful route or pipe (re)selection. */
@@ -953,6 +956,10 @@ interface ProjectState {
   /** keepPlacing is true when Shift was held, so the tool stays active for placing several points in a row. */
   addConnectionPoint: (layerId: string, relX: number, relY: number, keepPlacing?: boolean) => void
   deleteConnectionPoint: (layerId: string, pointId: string) => void
+  /** The "pick transparent color" eyedropper: samples the pixel at relX/relY (fractions of the image's footprint) and re-encodes the image with every matching pixel made transparent — one-shot, exits the tool on completion. */
+  pickTransparentColorAt: (layerId: string, relX: number, relY: number) => Promise<void>
+  /** Reverts to the pre-edit image saved in ImageLayer.originalSrc (see pickTransparentColorAt) — a no-op if no transparent-color edit has been applied. */
+  restoreOriginalImage: (layerId: string) => void
 
   setProjectName: (name: string) => void
   refreshProjectList: () => Promise<void>
@@ -1019,6 +1026,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   placingType: null,
   drawingShapeKind: null,
   connectionPointTargetLayerId: null,
+  pickTransparentColorTargetLayerId: null,
   gridSize: BASE_GRID_SIZE / 8,
   tagRenameError: null,
   routeError: null,
@@ -1562,18 +1570,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       placingType: tool === 'place' ? componentTypeId : null,
       drawingShapeKind: tool === 'draw-shape' ? (componentTypeId as FreeShapeKind | null) : null,
       connectionPointTargetLayerId: tool === 'place-connection-point' ? componentTypeId : null,
+      pickTransparentColorTargetLayerId: tool === 'pick-transparent-color' ? componentTypeId : null,
       // Switching tools deselects a selected image layer — except arming
-      // the connection-point tool from that same layer's own "Add
-      // connection point" button, which isn't "another tool" from the
+      // the connection-point/transparent-color-pick tool from that same
+      // layer's own panel button, which isn't "another tool" from the
       // user's perspective, just a mode of editing the selected layer.
       selectedLayerId:
-        tool === 'place-connection-point' && componentTypeId === state.selectedLayerId
+        (tool === 'place-connection-point' || tool === 'pick-transparent-color') &&
+        componentTypeId === state.selectedLayerId
           ? state.selectedLayerId
           : null,
     })),
 
   cancelTool: () =>
-    set({ tool: 'select', placingType: null, drawingShapeKind: null, connectionPointTargetLayerId: null }),
+    set({
+      tool: 'select',
+      placingType: null,
+      drawingShapeKind: null,
+      connectionPointTargetLayerId: null,
+      pickTransparentColorTargetLayerId: null,
+    }),
 
   setGridSize: (size) => set({ gridSize: size }),
 
@@ -2628,6 +2644,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           : l,
       ),
     })),
+
+  pickTransparentColorAt: async (layerId, relX, relY) => {
+    // Exits the eyedropper tool immediately (one-shot, like PowerPoint's
+    // own "Set Transparent Color") rather than waiting for the async
+    // processing below — the click itself is the completed gesture from
+    // the user's perspective.
+    set((state) => ({
+      tool: 'select',
+      pickTransparentColorTargetLayerId: null,
+      selectedLayerId: state.selectedLayerId ?? layerId,
+    }))
+    const layer = get().layers.find((l) => l.layerId === layerId)
+    if (!layer || layer.kind !== 'image') return
+    try {
+      const hexColor = await samplePixelColor(layer.src, relX, relY)
+      const newSrc = await applyTransparentColor(layer.src, hexColor)
+      set((state) => ({
+        ...pushHistory(state),
+        layers: state.layers.map((l) =>
+          l.layerId === layerId && l.kind === 'image'
+            ? { ...l, src: newSrc, originalSrc: l.originalSrc ?? l.src }
+            : l,
+        ),
+      }))
+    } catch (err) {
+      console.error(`Failed to apply transparent color for layer "${layerId}":`, err)
+    }
+  },
+
+  restoreOriginalImage: (layerId) =>
+    set((state) => {
+      const layer = state.layers.find((l) => l.layerId === layerId)
+      if (!layer || layer.kind !== 'image' || !layer.originalSrc) return {}
+      return {
+        ...pushHistory(state),
+        layers: state.layers.map((l) =>
+          l.layerId === layerId && l.kind === 'image' ? { ...l, src: l.originalSrc!, originalSrc: undefined } : l,
+        ),
+      }
+    }),
 
   setProjectName: (name) => set({ projectName: name }),
 

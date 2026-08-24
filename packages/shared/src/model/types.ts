@@ -277,6 +277,8 @@ export interface ImageLayer extends LayerBase {
   kind: 'image'
   /** Data URI — images are embedded directly in the project JSON, no separate asset pipeline. */
   src: string
+  /** The pre-"Set Transparent Color" data URI, saved the first time that edit is applied (never overwritten by a later re-application, so it always holds the true original) — lets "Restore original image" undo the edit outside of undo history. Unset when no transparent-color edit has been applied (or after restoring). */
+  originalSrc?: string
   opacity: number
   /** Whether this background image is embedded in the exported live SVG or stays editor-only. */
   includeInExport: boolean
