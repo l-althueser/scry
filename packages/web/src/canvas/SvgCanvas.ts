@@ -1312,6 +1312,17 @@ export class SvgCanvas {
       active.blur()
     }
     this.svg.setPointerCapture(evt.pointerId)
+
+    // Middle-mouse-button drag pans, exactly like Shift+drag — regardless of
+    // tool or what's under the cursor, matching the common app convention
+    // (browsers, design tools) of the wheel button always panning.
+    if (evt.button === 1) {
+      this.dragMode = 'pan'
+      this.dragStartScreen = { x: evt.clientX, y: evt.clientY }
+      this.dragStartViewBox = { ...this.viewBox }
+      return
+    }
+
     const world = this.screenToWorld(evt.clientX, evt.clientY)
 
     if (this.tool === 'place' && this.placingType) {
