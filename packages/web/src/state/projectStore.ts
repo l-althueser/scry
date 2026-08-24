@@ -34,6 +34,7 @@ import * as api from '../api/client'
 import { exportProjectToSvg } from '../export/svgExport'
 import { downloadTextFile } from '../export/downloadFile'
 import { applyTransparentColor, samplePixelColor } from '../import/imageTransparency'
+import { resizeImage } from '../import/imageResize'
 import { computePipeVolumeGroups, expandToVolumeSiblings } from '../pipes/pipeVolumes'
 import {
   detachPipesFromInstances,
@@ -972,6 +973,10 @@ interface ProjectState {
   setTransparentColorTolerance: (tolerance: number, layerId?: string) => void
   /** Reverts to the pre-edit image saved in ImageLayer.originalSrc (see pickTransparentColorAt) — a no-op if no transparent-color edit has been applied. */
   restoreOriginalImage: (layerId: string) => void
+  /** Re-encodes the image's native pixel size to shrink file size (independent of its on-canvas display width/height, see resizeImageLayer). Snapshots the pre-resize image into originalSrc the same way pickTransparentColorAt does, so restoreOriginalImage also undoes a resize. */
+  resizeImagePixels: (layerId: string, targetWidth: number, targetHeight: number) => Promise<void>
+  /** Permanently drops ImageLayer.originalSrc (and the now-meaningless transparentColorHex), making the current src the new floor with nothing left to restore — a no-op if originalSrc isn't set. */
+  discardOriginalImage: (layerId: string) => void
 
   setProjectName: (name: string) => void
   refreshProjectList: () => Promise<void>
@@ -2740,6 +2745,34 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           l.layerId === layerId && l.kind === 'image'
             ? { ...l, src: l.originalSrc!, originalSrc: undefined, transparentColorHex: undefined }
             : l,
+        ),
+      }
+    }),
+
+  resizeImagePixels: async (layerId, targetWidth, targetHeight) => {
+    const layer = get().layers.find((l) => l.layerId === layerId)
+    if (!layer || layer.kind !== 'image') return
+    try {
+      const newSrc = await resizeImage(layer.src, targetWidth, targetHeight)
+      set((state) => ({
+        ...pushHistory(state),
+        layers: state.layers.map((l) =>
+          l.layerId === layerId && l.kind === 'image' ? { ...l, src: newSrc, originalSrc: l.originalSrc ?? l.src } : l,
+        ),
+      }))
+    } catch (err) {
+      console.error(`Failed to resize image for layer "${layerId}":`, err)
+    }
+  },
+
+  discardOriginalImage: (layerId) =>
+    set((state) => {
+      const layer = state.layers.find((l) => l.layerId === layerId)
+      if (!layer || layer.kind !== 'image' || !layer.originalSrc) return {}
+      return {
+        ...pushHistory(state),
+        layers: state.layers.map((l) =>
+          l.layerId === layerId && l.kind === 'image' ? { ...l, originalSrc: undefined, transparentColorHex: undefined } : l,
         ),
       }
     }),

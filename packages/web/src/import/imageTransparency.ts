@@ -1,6 +1,6 @@
 /** "Set Transparent Color" — same one-shot eyedropper behavior PowerPoint offers for removing a flat background (e.g. white) from a pasted image. Applied once, baked directly into the returned data URI: this app models an image layer with a single `src`, so there's no separate "original" kept around to re-pick from later — picking again just needs re-importing the source image. */
 
-function loadImage(src: string): Promise<HTMLImageElement> {
+export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => resolve(img)

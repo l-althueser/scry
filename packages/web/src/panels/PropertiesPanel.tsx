@@ -20,6 +20,8 @@ import {
 } from '../pipes/pipeGeometry'
 import { DEFAULT_FONT_SIZE } from '../shapes/freeShapeGeometry'
 import { loadImageFile } from '../import/loadImageFile'
+import { loadImage } from '../import/imageTransparency'
+import { estimateDataUriBytes, formatBytes } from '../import/imageResize'
 import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint } from '../library'
 import { describeComposition, type CompositionCounts } from '../state/selectionDescription'
 
@@ -334,6 +336,8 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const transparentColorTolerance = useProjectStore((s) => s.transparentColorTolerance)
   const setTransparentColorTolerance = useProjectStore((s) => s.setTransparentColorTolerance)
   const restoreOriginalImage = useProjectStore((s) => s.restoreOriginalImage)
+  const resizeImagePixels = useProjectStore((s) => s.resizeImagePixels)
+  const discardOriginalImage = useProjectStore((s) => s.discardOriginalImage)
   const checkpointHistory = useProjectStore((s) => s.checkpointHistory)
   const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
   const closeSearchPanel = useProjectStore((s) => s.closeSearchPanel)
@@ -415,6 +419,10 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const [volumeTagInput, setVolumeTagInput] = useState('')
   const [shapeTextInput, setShapeTextInput] = useState('')
   const [layerNameInput, setLayerNameInput] = useState('')
+  const [imageSizeInfo, setImageSizeInfo] = useState<{ width: number; height: number; bytes: number } | null>(null)
+  const [resizeWidth, setResizeWidth] = useState(1)
+  const [resizeHeight, setResizeHeight] = useState(1)
+  const [resizeAspectLocked, setResizeAspectLocked] = useState(true)
 
   useEffect(() => {
     setTagInput(instance?.tag ?? '')
@@ -435,6 +443,29 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   useEffect(() => {
     setLayerNameInput(selectedLayer?.name ?? '')
   }, [selectedLayer?.layerId, selectedLayer?.name])
+
+  useEffect(() => {
+    if (!selectedLayer || selectedLayer.kind !== 'image') {
+      setImageSizeInfo(null)
+      return
+    }
+    const src = selectedLayer.src
+    let cancelled = false
+    loadImage(src)
+      .then((img) => {
+        if (cancelled) return
+        const info = { width: img.naturalWidth, height: img.naturalHeight, bytes: estimateDataUriBytes(src) }
+        setImageSizeInfo(info)
+        setResizeWidth(info.width)
+        setResizeHeight(info.height)
+      })
+      .catch(() => {
+        if (!cancelled) setImageSizeInfo(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedLayer?.layerId, selectedLayer?.kind === 'image' ? selectedLayer.src : undefined])
 
   const volumeSiblings = pipe ? pipes.filter((p) => p.volumeTag === pipe.volumeTag) : []
 
@@ -1081,6 +1112,84 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               onChange={(e) => setLayerOpacity(layer.layerId, Number(e.target.value))}
             />
           </label>
+        </fieldset>
+
+        <fieldset className="field roles-field">
+          <legend>File size</legend>
+          <p className="field-hint">
+            {imageSizeInfo
+              ? `${imageSizeInfo.width} × ${imageSizeInfo.height} px · ${formatBytes(imageSizeInfo.bytes)}`
+              : 'Loading…'}
+          </p>
+          <div className="layer-rect-grid">
+            <label className="field">
+              <span>Width (px)</span>
+              <input
+                type="number"
+                min={1}
+                value={resizeWidth}
+                onChange={(e) => {
+                  const width = Math.max(1, Number(e.target.value) || 1)
+                  const height =
+                    resizeAspectLocked && imageSizeInfo && resizeWidth > 0
+                      ? Math.max(1, Math.round((width * resizeHeight) / resizeWidth))
+                      : resizeHeight
+                  setResizeWidth(width)
+                  setResizeHeight(height)
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Height (px)</span>
+              <input
+                type="number"
+                min={1}
+                value={resizeHeight}
+                onChange={(e) => {
+                  const height = Math.max(1, Number(e.target.value) || 1)
+                  const width =
+                    resizeAspectLocked && imageSizeInfo && resizeHeight > 0
+                      ? Math.max(1, Math.round((height * resizeWidth) / resizeHeight))
+                      : resizeWidth
+                  setResizeHeight(height)
+                  setResizeWidth(width)
+                }}
+              />
+            </label>
+          </div>
+          <label className="role-checkbox">
+            <input
+              type="checkbox"
+              checked={resizeAspectLocked}
+              onChange={(e) => setResizeAspectLocked(e.target.checked)}
+            />
+            lock aspect ratio
+          </label>
+          <div className="field-row">
+            <button
+              onClick={() => resizeImagePixels(layer.layerId, resizeWidth, resizeHeight)}
+              title="Re-encodes the image at this native pixel size to shrink its file size — this is independent of the on-canvas Width/Height below, which only control its display size."
+            >
+              Resize image
+            </button>
+            {layer.originalSrc && (
+              <button
+                className="danger"
+                onClick={() => {
+                  if (
+                    confirm(
+                      'Permanently discard the original full-size image and keep only the current, smaller version? This cannot be undone once you save/close the project.',
+                    )
+                  ) {
+                    discardOriginalImage(layer.layerId)
+                  }
+                }}
+                title="Frees the storage the pre-edit original is holding onto — after this, 'Restore original image' is gone."
+              >
+                Discard original (keep this size)
+              </button>
+            )}
+          </div>
         </fieldset>
 
         <fieldset className="field roles-field">
