@@ -65,7 +65,7 @@ export function resolveLeaderLineEndpoint(
     if (endpoint.targetKind === 'pipe') {
       const pipe = pipes.find((p) => p.instanceId === endpoint.targetId)
       if (!pipe) return null
-      const points = getPipePoints(pipe, instances, pipes, layers)
+      const points = getPipePoints(pipe, instances, pipes, layers, freeShapes)
       return points ? pointAlongPolyline(points, endpoint.segmentIndex, endpoint.t) : null
     }
     // roleBox

@@ -2,6 +2,7 @@ import {
   isPortRef,
   type ComponentInstance,
   type FreePoint,
+  type FreeShape,
   type ImageLayer,
   type Layer,
   type PipeInstance,
@@ -9,6 +10,7 @@ import {
 } from '@svg-editor/shared'
 import { fmt, rotatePoint } from '../library/componentUtils'
 import { getComponentType, resolvePorts } from '../library/registry'
+import { boundsOfPoints } from '../shapes/freeShapeGeometry'
 
 export interface Point {
   x: number
@@ -119,13 +121,49 @@ export function detachPipesFromPipes(
   instances: ComponentInstance[],
   layers: Layer[],
   removedPipeIds: ReadonlySet<string>,
+  freeShapes: FreeShape[] = [],
 ): PipeInstance[] {
   const detach = (ref: PortRef | FreePoint): PortRef | FreePoint => {
     if (!isPortRef(ref) || !ref.portId.startsWith(PIPE_POINT_PREFIX) || !removedPipeIds.has(ref.instanceId)) return ref
-    return resolvePortRefWorldPosition(ref, instances, pipes, layers) ?? ref
+    return resolvePortRefWorldPosition(ref, instances, pipes, layers, freeShapes) ?? ref
   }
   return pipes.map((pipe) => {
     if (removedPipeIds.has(pipe.instanceId)) return pipe
+    const fromPort = detach(pipe.fromPort)
+    const toPort = detach(pipe.toPort)
+    return fromPort === pipe.fromPort && toPort === pipe.toPort ? pipe : { ...pipe, fromPort, toPort }
+  })
+}
+
+/**
+ * Detaches any pipe endpoint referencing a connection point on one of the
+ * given (about-to-be-removed) image layers or shapes, replacing that PortRef
+ * with a FreePoint fixed at its last known world position — same "leave a
+ * knot instead of dangling" contract as detachPipesFromInstances, just for
+ * connection-point owners instead of component instances (image/shape
+ * deletion previously skipped this entirely, silently leaving any attached
+ * pipe end referencing a layer/shape that no longer exists). `instances`/
+ * `pipes`/`layers`/`freeShapes` must be the arrays as they stood *before*
+ * removal, since positions are resolved against them.
+ */
+export function detachPipesFromConnectionPointOwners(
+  pipes: PipeInstance[],
+  instances: ComponentInstance[],
+  layers: Layer[],
+  freeShapes: FreeShape[],
+  removedLayerIds: ReadonlySet<string>,
+  removedShapeIds: ReadonlySet<string>,
+): PipeInstance[] {
+  if (removedLayerIds.size === 0 && removedShapeIds.size === 0) return pipes
+  const detach = (ref: PortRef | FreePoint): PortRef | FreePoint => {
+    if (!isPortRef(ref)) return ref
+    const isRemovedOwner =
+      (ref.portId.startsWith(IMAGE_POINT_PREFIX) && removedLayerIds.has(ref.instanceId)) ||
+      (ref.portId.startsWith(SHAPE_POINT_PREFIX) && removedShapeIds.has(ref.instanceId))
+    if (!isRemovedOwner) return ref
+    return resolvePortRefWorldPosition(ref, instances, pipes, layers, freeShapes) ?? ref
+  }
+  return pipes.map((pipe) => {
     const fromPort = detach(pipe.fromPort)
     const toPort = detach(pipe.toPort)
     return fromPort === pipe.fromPort && toPort === pipe.toPort ? pipe : { ...pipe, fromPort, toPort }
@@ -153,6 +191,21 @@ export function getImageConnectionPointWorldPosition(layer: ImageLayer, pointId:
   return { x: layer.x + cp.relX * layer.width, y: layer.y + cp.relY * layer.height }
 }
 
+/** portId convention for a PortRef that points at a user-placed connection point on a free shape — parallel to IMAGE_POINT_PREFIX. */
+export const SHAPE_POINT_PREFIX = 'scp:'
+
+export function shapePointPortId(pointId: string): string {
+  return `${SHAPE_POINT_PREFIX}${pointId}`
+}
+
+/** World position of one shape's connection point, computed from the shape's *current* bounding box — same tracking-through-edits behavior as getImageConnectionPointWorldPosition. */
+export function getShapeConnectionPointWorldPosition(shape: FreeShape, pointId: string): Point | null {
+  const cp = (shape.connectionPoints ?? []).find((p) => p.pointId === pointId)
+  if (!cp) return null
+  const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+  return { x: minX + cp.relX * (maxX - minX), y: minY + cp.relY * (maxY - minY) }
+}
+
 /**
  * Resolves any connection point a pipe end can attach to: a fixed
  * world-space point (an unattached end left by cutting a draw short), a
@@ -169,6 +222,7 @@ export function resolvePortRefWorldPosition(
   instances: ComponentInstance[],
   pipes: PipeInstance[],
   layers: Layer[] = [],
+  freeShapes: FreeShape[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): Point | null {
   if (!isPortRef(ref)) return { x: ref.x, y: ref.y }
@@ -182,6 +236,12 @@ export function resolvePortRefWorldPosition(
     return getImageConnectionPointWorldPosition(layer, ref.portId.slice(IMAGE_POINT_PREFIX.length))
   }
 
+  if (ref.portId.startsWith(SHAPE_POINT_PREFIX)) {
+    const shape = freeShapes.find((s) => s.instanceId === ref.instanceId)
+    if (!shape) return null
+    return getShapeConnectionPointWorldPosition(shape, ref.portId.slice(SHAPE_POINT_PREFIX.length))
+  }
+
   if (!ref.portId.startsWith(PIPE_POINT_PREFIX) || visiting.has(ref.instanceId)) return null
   const pipe = pipes.find((p) => p.instanceId === ref.instanceId)
   if (!pipe) return null
@@ -189,26 +249,28 @@ export function resolvePortRefWorldPosition(
   const index = Number(ref.portId.slice(PIPE_POINT_PREFIX.length))
   if (!Number.isInteger(index)) return null
 
-  const points = getPipePoints(pipe, instances, pipes, layers, new Set(visiting).add(ref.instanceId))
+  const points = getPipePoints(pipe, instances, pipes, layers, freeShapes, new Set(visiting).add(ref.instanceId))
   if (!points || index < 0 || index >= points.length) return null
   return points[index]
 }
 
 /**
  * Full world-space point list for a pipe (port -> waypoints -> port), or
- * null if either end can't be resolved. `pipes`/`layers` are needed to
- * resolve ends that branch off another pipe's point or an image layer's
- * connection point, rather than a component port.
+ * null if either end can't be resolved. `pipes`/`layers`/`freeShapes` are
+ * needed to resolve ends that branch off another pipe's point, an image
+ * layer's connection point, or a shape's connection point, rather than a
+ * component port.
  */
 export function getPipePoints(
   pipe: PipeInstance,
   instances: ComponentInstance[],
   pipes: PipeInstance[] = [],
   layers: Layer[] = [],
+  freeShapes: FreeShape[] = [],
   visiting: ReadonlySet<string> = new Set([pipe.instanceId]),
 ): Point[] | null {
-  const fromPos = resolvePortRefWorldPosition(pipe.fromPort, instances, pipes, layers, visiting)
-  const toPos = resolvePortRefWorldPosition(pipe.toPort, instances, pipes, layers, visiting)
+  const fromPos = resolvePortRefWorldPosition(pipe.fromPort, instances, pipes, layers, freeShapes, visiting)
+  const toPos = resolvePortRefWorldPosition(pipe.toPort, instances, pipes, layers, freeShapes, visiting)
   if (!fromPos || !toPos) return null
   return [fromPos, ...pipe.waypoints.map((w) => ({ x: w.x, y: w.y })), toPos]
 }

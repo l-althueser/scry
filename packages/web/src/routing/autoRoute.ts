@@ -1,4 +1,4 @@
-import type { ComponentInstance, Layer, PipeInstance, Waypoint } from '@svg-editor/shared'
+import type { ComponentInstance, FreeShape, Layer, PipeInstance, Waypoint } from '@svg-editor/shared'
 import { rotatePoint } from '../library/componentUtils'
 import { getComponentType, resolveLocalBodyCorners } from '../library/registry'
 import { getPipePoints, type Point } from '../pipes/pipeGeometry'
@@ -181,9 +181,10 @@ export function computeAutoRoute(
   instances: ComponentInstance[],
   pipes: PipeInstance[],
   layers: Layer[],
+  freeShapes: FreeShape[],
   options: AutoRouteOptions,
 ): Waypoint[] | null {
-  const points = getPipePoints(pipe, instances, pipes, layers)
+  const points = getPipePoints(pipe, instances, pipes, layers, freeShapes)
   if (!points) return null
   const start = points[0]
   const end = points[points.length - 1]

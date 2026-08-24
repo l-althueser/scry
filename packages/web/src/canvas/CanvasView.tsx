@@ -28,6 +28,8 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const placingType = useProjectStore((s) => s.placingType)
   const drawingShapeKind = useProjectStore((s) => s.drawingShapeKind)
   const connectionPointTargetLayerId = useProjectStore((s) => s.connectionPointTargetLayerId)
+  const connectionPointTargetShapeId = useProjectStore((s) => s.connectionPointTargetShapeId)
+  const selectedConnectionPoint = useProjectStore((s) => s.selectedConnectionPoint)
   const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
   const gridSize = useProjectStore((s) => s.gridSize)
   const gridVisible = useProjectStore((s) => s.gridVisible)
@@ -38,7 +40,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const selectedEndpoint = useProjectStore((s) => s.selectedEndpoint)
   const selectedShapeIds = useProjectStore((s) => s.selectedShapeIds)
   const selectedLeaderLineIds = useProjectStore((s) => s.selectedLeaderLineIds)
-  const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
+  const selectedLayerIds = useProjectStore((s) => s.selectedLayerIds)
   const imageAspectLocked = useProjectStore((s) => s.imageAspectLocked)
   const addInstance = useProjectStore((s) => s.addInstance)
   const moveInstance = useProjectStore((s) => s.moveInstance)
@@ -65,10 +67,13 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const selectLeaderLines = useProjectStore((s) => s.selectLeaderLines)
   const moveLeaderLinePoint = useProjectStore((s) => s.moveLeaderLinePoint)
   const moveLeaderLineFrom = useProjectStore((s) => s.moveLeaderLineFrom)
-  const selectLayer = useProjectStore((s) => s.selectLayer)
+  const selectLayers = useProjectStore((s) => s.selectLayers)
   const moveImageLayer = useProjectStore((s) => s.moveImageLayer)
   const resizeImageLayer = useProjectStore((s) => s.resizeImageLayer)
   const addConnectionPoint = useProjectStore((s) => s.addConnectionPoint)
+  const addShapeConnectionPoint = useProjectStore((s) => s.addShapeConnectionPoint)
+  const selectConnectionPoint = useProjectStore((s) => s.selectConnectionPoint)
+  const moveConnectionPoint = useProjectStore((s) => s.moveConnectionPoint)
   const pickTransparentColorAt = useProjectStore((s) => s.pickTransparentColorAt)
   const selectMixed = useProjectStore((s) => s.selectMixed)
   const selectGroup = useProjectStore((s) => s.selectGroup)
@@ -105,11 +110,16 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
       onLeaderLineSelectionChanged: (leaderLineIds) => selectLeaderLines(leaderLineIds),
       onLeaderLinePointMoved: (leaderLineId, point, pt) => moveLeaderLinePoint(leaderLineId, point, pt),
       onLeaderLineFromMoved: (leaderLineId, from) => moveLeaderLineFrom(leaderLineId, from),
-      onLayerSelected: (layerId) => selectLayer(layerId),
+      onLayerSelectionChanged: (layerIds) => selectLayers(layerIds),
       onLayerMoved: (layerId, x, y) => moveImageLayer(layerId, x, y),
       onLayerResized: (layerId, rect) => resizeImageLayer(layerId, rect),
       onConnectionPointAdded: (layerId, relX, relY, keepPlacing) =>
         addConnectionPoint(layerId, relX, relY, keepPlacing),
+      onShapeConnectionPointAdded: (shapeId, relX, relY, keepPlacing) =>
+        addShapeConnectionPoint(shapeId, relX, relY, keepPlacing),
+      onConnectionPointSelected: (selection) => selectConnectionPoint(selection),
+      onConnectionPointMoved: (ownerKind, ownerId, pointId, relX, relY) =>
+        moveConnectionPoint(ownerKind, ownerId, pointId, relX, relY),
       onTransparentColorPicked: (layerId, relX, relY) => void pickTransparentColorAt(layerId, relX, relY),
     })
     canvasRef.current = canvas
@@ -128,25 +138,42 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
     canvasRef.current?.syncLeaderLines(leaderLines, instances, pipes, freeShapes)
   }, [instances, pipes, leaderLines, freeShapes])
 
+  // Declared before syncFreeShapes below so that when `layers` changes, this
+  // effect's syncLayers call (which refreshes SvgCanvas's internal
+  // this.latestLayers) always runs first in the same commit — syncFreeShapes
+  // reads this.latestLayers to decide each shape's own-layer locked state
+  // (see renderShapeInto), and effects run in declaration order.
   useEffect(() => {
+    canvasRef.current?.syncLayers(layers)
+  }, [layers])
+
+  useEffect(() => {
+    // Also re-run on `layers` changes, not just `freeShapes` — a shape's
+    // hit-testing (pointer-events) and cursor depend on its own layer's
+    // locked state (see renderShapeInto), so locking/unlocking a layer must
+    // immediately update every shape on it, not wait for unrelated shape data to change.
     canvasRef.current?.syncFreeShapes(freeShapes)
-  }, [freeShapes])
+  }, [freeShapes, layers])
 
   useEffect(() => {
     canvasRef.current?.syncGroups(groups)
   }, [groups])
 
   useEffect(() => {
-    canvasRef.current?.syncLayers(layers)
-  }, [layers])
-
-  useEffect(() => {
     let subKind = placingType
     if (tool === 'draw-shape') subKind = drawingShapeKind
     else if (tool === 'place-connection-point') subKind = connectionPointTargetLayerId
+    else if (tool === 'place-connection-point-shape') subKind = connectionPointTargetShapeId
     else if (tool === 'pick-transparent-color') subKind = pickTransparentColorTargetLayerId
     canvasRef.current?.setTool(tool, subKind)
-  }, [tool, placingType, drawingShapeKind, connectionPointTargetLayerId, pickTransparentColorTargetLayerId])
+  }, [
+    tool,
+    placingType,
+    drawingShapeKind,
+    connectionPointTargetLayerId,
+    connectionPointTargetShapeId,
+    pickTransparentColorTargetLayerId,
+  ])
 
   useEffect(() => {
     canvasRef.current?.setSelection(selectedInstanceIds)
@@ -177,8 +204,12 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   }, [selectedLeaderLineIds])
 
   useEffect(() => {
-    canvasRef.current?.setLayerSelection(selectedLayerId)
-  }, [selectedLayerId])
+    canvasRef.current?.setLayerSelection(selectedLayerIds)
+  }, [selectedLayerIds])
+
+  useEffect(() => {
+    canvasRef.current?.setConnectionPointSelection(selectedConnectionPoint)
+  }, [selectedConnectionPoint])
 
   useEffect(() => {
     canvasRef.current?.setAspectLocked(imageAspectLocked)

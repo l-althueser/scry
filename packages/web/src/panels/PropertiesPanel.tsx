@@ -18,7 +18,7 @@ import {
   resolveIndicatorTag,
   type Point,
 } from '../pipes/pipeGeometry'
-import { DEFAULT_FONT_SIZE } from '../shapes/freeShapeGeometry'
+import { DEFAULT_FONT_SIZE, boundsOfPoints } from '../shapes/freeShapeGeometry'
 import { loadImageFile } from '../import/loadImageFile'
 import { loadImage } from '../import/imageTransparency'
 import { estimateDataUriBytes, formatBytes } from '../import/imageResize'
@@ -308,8 +308,9 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const setShapeText = useProjectStore((s) => s.setShapeText)
   const setShapeFontSize = useProjectStore((s) => s.setShapeFontSize)
   const setShapeTextAlign = useProjectStore((s) => s.setShapeTextAlign)
+  const resizeShape = useProjectStore((s) => s.resizeShape)
   const deleteShapes = useProjectStore((s) => s.deleteShapes)
-  const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
+  const selectedLayerIds = useProjectStore((s) => s.selectedLayerIds)
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const layers = useProjectStore((s) => s.layers)
   const addImageLayer = useProjectStore((s) => s.addImageLayer)
@@ -326,10 +327,13 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const setImageAspectLocked = useProjectStore((s) => s.setImageAspectLocked)
   const moveLayer = useProjectStore((s) => s.moveLayer)
   const deleteLayer = useProjectStore((s) => s.deleteLayer)
-  const selectLayer = useProjectStore((s) => s.selectLayer)
+  const selectLayers = useProjectStore((s) => s.selectLayers)
   const openLayersPanel = useProjectStore((s) => s.openLayersPanel)
   const closeLayersPanel = useProjectStore((s) => s.closeLayersPanel)
   const deleteConnectionPoint = useProjectStore((s) => s.deleteConnectionPoint)
+  const deleteShapeConnectionPoint = useProjectStore((s) => s.deleteShapeConnectionPoint)
+  const selectedConnectionPoint = useProjectStore((s) => s.selectedConnectionPoint)
+  const selectConnectionPoint = useProjectStore((s) => s.selectConnectionPoint)
   const setTool = useProjectStore((s) => s.setTool)
   const tool = useProjectStore((s) => s.tool)
   const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
@@ -374,7 +378,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
 
   const selectedLeaderLines = leaderLines.filter((l) => selectedLeaderLineIds.includes(l.instanceId))
 
-  const selectedLayer = layers.find((l) => l.layerId === selectedLayerId)
+  const selectedLayer = selectedLayerIds.length === 1 ? layers.find((l) => l.layerId === selectedLayerIds[0]) : undefined
   const vectorLayers = layers.filter((l) => l.kind === 'vector')
 
   // Computed unconditionally (not inside the search-mode branch below) so
@@ -423,6 +427,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const [resizeWidth, setResizeWidth] = useState(1)
   const [resizeHeight, setResizeHeight] = useState(1)
   const [resizeAspectLocked, setResizeAspectLocked] = useState(true)
+  const [shapeAspectLocked, setShapeAspectLocked] = useState(true)
 
   useEffect(() => {
     setTagInput(instance?.tag ?? '')
@@ -475,11 +480,11 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const displayPointsByPipe = useMemo(() => {
     const map = new Map<string, Point[]>()
     for (const p of pipes) {
-      const pts = getPipePoints(p, instances, pipes, layers)
+      const pts = getPipePoints(p, instances, pipes, layers, freeShapes)
       if (pts) map.set(p.instanceId, getDisplayPoints(p, pts))
     }
     return map
-  }, [pipes, instances, layers])
+  }, [pipes, instances, layers, freeShapes])
 
   const crossings =
     pipe && pipe.routingMode !== 'curved' ? computeCrossingsForPipe(pipe.instanceId, pipes, displayPointsByPipe) : []
@@ -506,6 +511,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       pipes: group.members.filter((m) => m.kind === 'pipe').length,
       shapes: group.members.filter((m) => m.kind === 'shape').length,
       leaderLines: group.members.filter((m) => m.kind === 'leaderLine').length,
+      images: group.members.filter((m) => m.kind === 'layer').length,
     }
 
     return (
@@ -532,7 +538,8 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   // below (pipes/shapes/leaderLines/instances) so none of their single-item
   // priority ordering swallows a mixed selection into e.g. "1 pipe
   // selected" while ignoring instances also selected alongside it.
-  const totalSelected = selected.length + selectedPipes.length + selectedShapes.length + selectedLeaderLines.length
+  const totalSelected =
+    selected.length + selectedPipes.length + selectedShapes.length + selectedLeaderLines.length + selectedLayerIds.length
   if (totalSelected > 1) {
     return (
       <SelectionStylePanel
@@ -542,6 +549,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           pipes: selectedPipes.length,
           shapes: selectedShapes.length,
           leaderLines: selectedLeaderLines.length,
+          images: selectedLayerIds.length,
         }}
         onStyleChange={(field, value) => setSelectionStyle(field, value)}
         onPipeFlagChange={(field, value) => setSelectionPipeFlag(field, value)}
@@ -668,7 +676,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           if (selectedWaypoint && selectedWaypoint.pipeId === pipe.instanceId) {
             pointIndex = selectedWaypoint.index + 1
           } else if (selectedEndpoint && selectedEndpoint.pipeId === pipe.instanceId) {
-            const rawPoints = getPipePoints(pipe, instances, pipes, layers)
+            const rawPoints = getPipePoints(pipe, instances, pipes, layers, freeShapes)
             pointIndex = selectedEndpoint.side === 'from' ? 0 : rawPoints ? rawPoints.length - 1 : null
           }
           if (pointIndex === null) return null
@@ -690,7 +698,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
                       setPipeArrow(pipe.instanceId, idx, null)
                       return
                     }
-                    const rawPoints = getPipePoints(pipe, instances, pipes, layers)
+                    const rawPoints = getPipePoints(pipe, instances, pipes, layers, freeShapes)
                     const rotationDeg = rawPoints ? computeDefaultArrowRotation(rawPoints, idx) : 0
                     setPipeArrow(pipe.instanceId, idx, { size: DEFAULT_ARROW_SIZE, rotationDeg })
                   }}
@@ -961,6 +969,91 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           </label>
         </fieldset>
 
+        {shape.kind !== 'text' &&
+          (() => {
+            const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+            const width = maxX - minX
+            const height = maxY - minY
+            return (
+              <fieldset className="field roles-field">
+                <legend>Geometry</legend>
+                <label className="role-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={shapeAspectLocked}
+                    onChange={(e) => setShapeAspectLocked(e.target.checked)}
+                  />
+                  lock aspect ratio
+                </label>
+                <div className="field-row">
+                  <label className="field">
+                    <span>Width</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={Math.round(width)}
+                      onChange={(e) => {
+                        const newWidth = Math.max(1, Number(e.target.value) || 1)
+                        const newHeight = shapeAspectLocked && width > 0 ? Math.max(1, Math.round((newWidth * height) / width)) : height
+                        resizeShape(shape.instanceId, newWidth, newHeight)
+                      }}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Height</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={Math.round(height)}
+                      onChange={(e) => {
+                        const newHeight = Math.max(1, Number(e.target.value) || 1)
+                        const newWidth = shapeAspectLocked && height > 0 ? Math.max(1, Math.round((newHeight * width) / height)) : width
+                        resizeShape(shape.instanceId, newWidth, newHeight)
+                      }}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+            )
+          })()}
+
+        {shape.kind !== 'text' && (
+          <fieldset className="field roles-field">
+            <legend>Connection points ({(shape.connectionPoints ?? []).length})</legend>
+            {(shape.connectionPoints ?? []).length === 0 && <p className="field-hint">None yet.</p>}
+            {(shape.connectionPoints ?? []).map((cp, i) => (
+              <div key={cp.pointId} className="field-row">
+                <button
+                  className={
+                    selectedConnectionPoint?.ownerKind === 'shape' &&
+                    selectedConnectionPoint.ownerId === shape.instanceId &&
+                    selectedConnectionPoint.pointId === cp.pointId
+                      ? 'tool-button active'
+                      : 'tool-button'
+                  }
+                  onClick={() =>
+                    selectConnectionPoint({ ownerKind: 'shape', ownerId: shape.instanceId, pointId: cp.pointId })
+                  }
+                  title="Click to highlight on canvas — drag its handle there, or use arrow keys, to reposition it."
+                >
+                  #{i + 1} ({(cp.relX * 100).toFixed(0)}%, {(cp.relY * 100).toFixed(0)}%)
+                </button>
+                <button className="danger" onClick={() => deleteShapeConnectionPoint(shape.instanceId, cp.pointId)}>
+                  Delete
+                </button>
+              </div>
+            ))}
+            <div className="field-row">
+              <button
+                onClick={() => setTool('place-connection-point-shape', shape.instanceId)}
+                title="Click, then click a spot on the shape — pipes can snap to it afterwards, and it stays put on the shape (as a % of its bounding box) through later moves/resizes. Shift while clicking keeps adding several in a row."
+              >
+                Add connection point
+              </button>
+            </div>
+          </fieldset>
+        )}
+
         <p className="field-hint">Drag the shape on the canvas to move it (Shift locks to horizontal/vertical).</p>
 
         <div className="field-row">
@@ -992,7 +1085,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
     )
   }
 
-  if (selectedLayerId) {
+  if (selectedLayerIds.length === 1) {
     if (!selectedLayer) {
       return (
         <aside className="properties-panel">
@@ -1001,12 +1094,24 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       )
     }
     if (selectedLayer.kind !== 'image') {
+      const vectorLayer = selectedLayer
       return (
         <aside className="properties-panel">
           <div className="field-row">
             <button onClick={() => openLayersPanel()}>&larr; All layers</button>
           </div>
-          <p className="properties-empty">This layer has no additional settings.</p>
+          <label
+            className="role-checkbox"
+            title="Locked shapes on this layer can't be selected, dragged, resized, or nudged on the canvas — same rule as a locked image layer. Untick to edit them again, or use this layer's settings/properties panel entry point instead."
+          >
+            <input
+              type="checkbox"
+              checked={vectorLayer.locked}
+              onChange={(e) => setLayerLocked(vectorLayer.layerId, e.target.checked)}
+            />
+            locked
+          </label>
+          <p className="properties-empty">This layer has no other settings.</p>
         </aside>
       )
     }
@@ -1277,9 +1382,19 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           {layer.connectionPoints.length === 0 && <p className="field-hint">None yet.</p>}
           {layer.connectionPoints.map((cp, i) => (
             <div key={cp.pointId} className="field-row">
-              <span>
+              <button
+                className={
+                  selectedConnectionPoint?.ownerKind === 'layer' &&
+                  selectedConnectionPoint.ownerId === layer.layerId &&
+                  selectedConnectionPoint.pointId === cp.pointId
+                    ? 'tool-button active'
+                    : 'tool-button'
+                }
+                onClick={() => selectConnectionPoint({ ownerKind: 'layer', ownerId: layer.layerId, pointId: cp.pointId })}
+                title="Click to highlight on canvas — drag its handle there, or use arrow keys, to reposition it."
+              >
                 #{i + 1} ({(cp.relX * 100).toFixed(0)}%, {(cp.relY * 100).toFixed(0)}%)
-              </span>
+              </button>
               <button className="danger" onClick={() => deleteConnectionPoint(layer.layerId, cp.pointId)}>
                 Delete
               </button>
@@ -1336,7 +1451,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               key={`${result.kind}-${result.id}`}
               result={result}
               onFocus={() => {
-                const point = resolveSearchResultWorldPoint(result, instances, pipes, layers)
+                const point = resolveSearchResultWorldPoint(result, instances, pipes, layers, freeShapes)
                 if (point) onFocusResult(point)
               }}
               onSelect={() => {
@@ -1454,10 +1569,10 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
                 </label>
                 <button
                   className="layer-name-button"
-                  onClick={() => selectLayer(layer.layerId)}
+                  onClick={() => selectLayers([layer.layerId])}
                   title={layer.kind === 'image' ? 'Click for settings, position, and connection points' : layer.name}
                 >
-                  {layer.kind === 'image' && layer.locked ? '\u{1F512} ' : ''}
+                  {layer.locked ? '\u{1F512} ' : ''}
                   {layer.name}
                 </button>
                 <div className="layer-row-buttons">

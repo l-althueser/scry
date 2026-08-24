@@ -756,6 +756,24 @@ body {
   stroke-width: 1.5;
 }
 
+.gv-shape-resize-handle {
+  fill: #ffffff;
+  stroke: #3b82f6;
+  stroke-width: 1.5;
+}
+
+.gv-connection-point-handle {
+  fill: #db2777;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+
+.gv-connection-point-handle.gv-selected {
+  fill: #f59e0b;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
 .gv-align-guide {
   stroke: #f59e0b;
   stroke-width: 1;

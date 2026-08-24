@@ -1,4 +1,4 @@
-import type { ComponentInstance, Layer, PipeInstance } from '@svg-editor/shared'
+import type { ComponentInstance, FreeShape, Layer, PipeInstance } from '@svg-editor/shared'
 import { getPipePoints, midpoint, type Point } from '../pipes/pipeGeometry'
 
 export interface TagSearchResult {
@@ -28,6 +28,7 @@ export function resolveSearchResultWorldPoint(
   instances: ComponentInstance[],
   pipes: PipeInstance[],
   layers: Layer[],
+  freeShapes: FreeShape[] = [],
 ): Point | null {
   if (result.kind === 'instance') {
     const inst = instances.find((i) => i.instanceId === result.id)
@@ -35,7 +36,7 @@ export function resolveSearchResultWorldPoint(
   }
   const pipe = pipes.find((p) => p.instanceId === result.id)
   if (!pipe) return null
-  const points = getPipePoints(pipe, instances, pipes, layers)
+  const points = getPipePoints(pipe, instances, pipes, layers, freeShapes)
   return points ? midpoint(points) : null
 }
 

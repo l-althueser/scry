@@ -42,18 +42,21 @@ import {
   getImageConnectionPointWorldPosition,
   getPipePoints,
   getPortWorldPosition,
+  getShapeConnectionPointWorldPosition,
   imagePointPortId,
   midpoint,
   pipePointPortId,
   resolveIndicatorTag,
   resolvePipeArrows,
   resolvePipeColor,
+  shapePointPortId,
   straightPathD,
   straightPathDWithHops,
 } from '../pipes/pipeGeometry'
 import {
   DEFAULT_FONT_SIZE,
   TEXT_LINE_HEIGHT,
+  boundsOfPoints,
   ellipseAttrs,
   nearestPointOnShapeBorder,
   nearestPointOnShapeBorderIndexed,
@@ -83,6 +86,7 @@ export type Tool =
   | 'draw-pipe'
   | 'draw-shape'
   | 'place-connection-point'
+  | 'place-connection-point-shape'
   | 'draw-leader-line'
   | 'pick-transparent-color'
 
@@ -126,6 +130,7 @@ export interface SvgCanvasCallbacks {
     pipeIds: string[]
     shapeIds: string[]
     leaderLineIds: string[]
+    layerIds: string[]
   }) => void
   /** Clicking (or box-selecting into) any member of a persisted Group selects the whole group as a unit — see the grouping plan's PowerPoint-style click behavior. */
   onGroupSelected: (groupId: string) => void
@@ -168,13 +173,19 @@ export interface SvgCanvasCallbacks {
   onShapeMoved: (shapeId: string, points: Point[]) => void
   onShapeSelectionChanged: (shapeIds: string[]) => void
 
-  onLayerSelected: (layerId: string | null) => void
+  onLayerSelectionChanged: (layerIds: string[]) => void
   /** Reported as the layer's new x/y — SvgCanvas doesn't know width/height, the store fills those in from its own copy. */
   onLayerMoved: (layerId: string, x: number, y: number) => void
   /** Dragging a corner handle — reports the full new rect (opposite corner stays anchored). */
   onLayerResized: (layerId: string, rect: { x: number; y: number; width: number; height: number }) => void
   /** relX/relY are fractions of the image's current width/height, so the point stays put relative to the image through later drags/resizes. keepPlacing mirrors the other tools' Shift convention. */
   onConnectionPointAdded: (layerId: string, relX: number, relY: number, keepPlacing: boolean) => void
+  /** Parallel to onConnectionPointAdded, but relX/relY are fractions of the shape's own bounding box. */
+  onShapeConnectionPointAdded: (shapeId: string, relX: number, relY: number, keepPlacing: boolean) => void
+  /** Clicking (or starting a drag on) a connection-point handle selects it — see connectionPointHandlesGroup. */
+  onConnectionPointSelected: (selection: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null) => void
+  /** Live update while dragging a connection-point handle — relX/relY already resolved against the owner's current bbox. No history push per frame, checkpointed via onDragCheckpoint at drag-start like every other continuous drag. */
+  onConnectionPointMoved: (ownerKind: 'layer' | 'shape', ownerId: string, pointId: string, relX: number, relY: number) => void
   /** relX/relY are fractions of the image's current width/height, same convention as onConnectionPointAdded — the store resolves the actual pixel color and reprocesses the image. */
   onTransparentColorPicked: (layerId: string, relX: number, relY: number) => void
 
@@ -218,6 +229,8 @@ type DragMode =
   | 'move-layer'
   | 'resize-layer'
   | 'resize-instance'
+  | 'resize-shape-point'
+  | 'move-connection-point'
 
 type ResizeHandle = 'nw' | 'ne' | 'sw' | 'se'
 export type PipeEndpointSide = 'from' | 'to'
@@ -279,7 +292,7 @@ export class SvgCanvas {
   private selectedEndpoint: { pipeId: string; side: PipeEndpointSide } | null = null
   private selectedShapeIds: string[] = []
   private selectedLeaderLineIds: string[] = []
-  private selectedLayerId: string | null = null
+  private selectedLayerIds: string[] = []
 
   /**
    * Set on pointerdown when an endpointEl/waypointEl click lands on the
@@ -311,6 +324,11 @@ export class SvgCanvas {
   private dragShapeId: string | null = null
   private dragShapeStartWorld: Point = { x: 0, y: 0 }
   private dragShapeStartPoints: Point[] = []
+  private dragShapePointIndex: number | null = null
+  private dragConnectionPointOwnerKind: 'layer' | 'shape' | null = null
+  private dragConnectionPointOwnerId: string | null = null
+  private dragConnectionPointId: string | null = null
+  private selectedConnectionPoint: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null = null
   private dragLeaderLineId: string | null = null
   private dragLeaderLinePoint: 'from' | 'to' | number | null = null
   private dragLayerId: string | null = null
@@ -347,6 +365,8 @@ export class SvgCanvas {
   private companionPointsGroup: SVGGElement
   private layerResizeHandlesGroup: SVGGElement
   private instanceResizeHandlesGroup: SVGGElement
+  private shapeResizeHandlesGroup: SVGGElement
+  private connectionPointHandlesGroup: SVGGElement
   private alignGuideGroup: SVGGElement
   private latestInstances: ComponentInstance[] = []
   private latestPipes: PipeInstance[] = []
@@ -447,6 +467,14 @@ export class SvgCanvas {
     this.instanceResizeHandlesGroup.setAttribute('class', 'gv-instance-resize-handles')
     this.overlayLayer.appendChild(this.instanceResizeHandlesGroup)
 
+    this.shapeResizeHandlesGroup = document.createElementNS(SVG_NS, 'g')
+    this.shapeResizeHandlesGroup.setAttribute('class', 'gv-shape-resize-handles')
+    this.overlayLayer.appendChild(this.shapeResizeHandlesGroup)
+
+    this.connectionPointHandlesGroup = document.createElementNS(SVG_NS, 'g')
+    this.connectionPointHandlesGroup.setAttribute('class', 'gv-connection-point-handles')
+    this.overlayLayer.appendChild(this.connectionPointHandlesGroup)
+
     this.alignGuideGroup = document.createElementNS(SVG_NS, 'g')
     this.alignGuideGroup.setAttribute('class', 'gv-align-guides')
     this.alignGuideGroup.style.pointerEvents = 'none'
@@ -477,6 +505,7 @@ export class SvgCanvas {
   private placingType: string | null = null
   private drawingShapeKind: FreeShapeKind | null = null
   private connectionPointTargetLayerId: string | null = null
+  private connectionPointTargetShapeId: string | null = null
   private pickTransparentColorTargetLayerId: string | null = null
 
   setTool(tool: Tool, subKind: string | null = null) {
@@ -484,6 +513,7 @@ export class SvgCanvas {
     this.placingType = tool === 'place' ? subKind : null
     this.drawingShapeKind = tool === 'draw-shape' ? (subKind as FreeShapeKind | null) : null
     this.connectionPointTargetLayerId = tool === 'place-connection-point' ? subKind : null
+    this.connectionPointTargetShapeId = tool === 'place-connection-point-shape' ? subKind : null
     this.pickTransparentColorTargetLayerId = tool === 'pick-transparent-color' ? subKind : null
     this.svg.style.cursor = tool === 'select' ? 'default' : 'crosshair'
     if (tool !== 'place') {
@@ -714,7 +744,7 @@ export class SvgCanvas {
     }
     const excludeWaypoint = opts?.excludeWaypoint
     for (const pipe of this.latestPipes) {
-      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
       if (!points) continue
       points.forEach((p, idx) => {
         if (excludeWaypoint && pipe.instanceId === excludeWaypoint.pipeId && idx === excludeWaypoint.index + 1) {
@@ -980,7 +1010,7 @@ export class SvgCanvas {
     }
     for (const pipe of this.latestPipes) {
       if (pipe.instanceId === excludePipeId) continue
-      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
       if (!points) continue
       points.forEach((pos, idx) => {
         const d = Math.hypot(pos.x - worldPt.x, pos.y - worldPt.y)
@@ -997,6 +1027,16 @@ export class SvgCanvas {
         const d = Math.hypot(pos.x - worldPt.x, pos.y - worldPt.y)
         if (d <= PORT_SNAP_RADIUS && (!best || d < best.dist)) {
           best = { ref: { instanceId: layer.layerId, portId: imagePointPortId(cp.pointId) }, pos, dist: d }
+        }
+      }
+    }
+    for (const shape of this.latestShapes) {
+      for (const cp of shape.connectionPoints ?? []) {
+        const pos = getShapeConnectionPointWorldPosition(shape, cp.pointId)
+        if (!pos) continue
+        const d = Math.hypot(pos.x - worldPt.x, pos.y - worldPt.y)
+        if (d <= PORT_SNAP_RADIUS && (!best || d < best.dist)) {
+          best = { ref: { instanceId: shape.instanceId, portId: shapePointPortId(cp.pointId) }, pos, dist: d }
         }
       }
     }
@@ -1028,7 +1068,7 @@ export class SvgCanvas {
     const EPS = PORT_SNAP_RADIUS
     const result: { pipeId: string; point: 'from' | 'to' | number }[] = []
     for (const pipe of this.latestPipes) {
-      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
       if (!points) continue
       points.forEach((p, idx) => {
         if (Math.hypot(p.x - pos.x, p.y - pos.y) > EPS) return
@@ -1125,7 +1165,7 @@ export class SvgCanvas {
     }
 
     for (const pipe of this.latestPipes) {
-      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
       if (!points) continue
       const hit = nearestPointOnPolylineIndexed(points, worldPt)
       if (hit && hit.dist <= PORT_SNAP_RADIUS && (!best || hit.dist < best.dist)) {
@@ -1217,7 +1257,10 @@ export class SvgCanvas {
     }
 
     const showSnapTargets =
-      this.tool === 'draw-pipe' || this.tool === 'place-connection-point' || this.dragMode === 'move-pipe-endpoint'
+      this.tool === 'draw-pipe' ||
+      this.tool === 'place-connection-point' ||
+      this.tool === 'place-connection-point-shape' ||
+      this.dragMode === 'move-pipe-endpoint'
     if (showSnapTargets) {
       for (const inst of this.latestInstances) {
         const def = getComponentType(inst.componentTypeId)
@@ -1229,7 +1272,7 @@ export class SvgCanvas {
       // Existing pipes' points (endpoints + waypoints) are also valid
       // connection points, so a new pipe can branch off a running line.
       for (const pipe of this.latestPipes) {
-        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
         points?.forEach((p) => addMarker(p))
       }
       for (const layer of this.latestLayers) {
@@ -1239,17 +1282,16 @@ export class SvgCanvas {
           if (pos) addMarker(pos)
         }
       }
-    }
-
-    if (this.selectedLayerId) {
-      const layer = this.latestLayers.find((l) => l.layerId === this.selectedLayerId)
-      if (layer && layer.kind === 'image') {
-        for (const cp of layer.connectionPoints) {
-          const pos = getImageConnectionPointWorldPosition(layer, cp.pointId)
-          if (pos) addMarker(pos, 'gv-port-marker gv-connection-point-selected')
+      for (const shape of this.latestShapes) {
+        for (const cp of shape.connectionPoints ?? []) {
+          const pos = getShapeConnectionPointWorldPosition(shape, cp.pointId)
+          if (pos) addMarker(pos)
         }
       }
     }
+    // The selected owner's own connection points get real interactive
+    // handles instead (connectionPointHandlesGroup, see
+    // refreshConnectionPointHandles) — no separate static preview needed here.
   }
 
   private updatePipeDraftPreview(currentPoint: Point) {
@@ -1443,7 +1485,7 @@ export class SvgCanvas {
     const pipeId = pipeEl.getAttribute('data-pipe-id')!
     const pipe = this.latestPipes.find((p) => p.instanceId === pipeId)
     if (!pipe) return
-    const rawPoints = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+    const rawPoints = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
     if (!rawPoints) return
 
     const world = this.screenToWorld(evt.clientX, evt.clientY)
@@ -1602,6 +1644,21 @@ export class SvgCanvas {
       return
     }
 
+    if (this.tool === 'place-connection-point-shape' && this.connectionPointTargetShapeId) {
+      const shape = this.latestShapes.find((s) => s.instanceId === this.connectionPointTargetShapeId)
+      if (shape) {
+        const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+        const width = maxX - minX
+        const height = maxY - minY
+        if (width > 0 && height > 0) {
+          const relX = clamp01((world.x - minX) / width)
+          const relY = clamp01((world.y - minY) / height)
+          this.callbacks.onShapeConnectionPointAdded(shape.instanceId, relX, relY, evt.shiftKey)
+        }
+      }
+      return
+    }
+
     if (this.tool === 'pick-transparent-color' && this.pickTransparentColorTargetLayerId) {
       const layer = this.latestLayers.find((l) => l.layerId === this.pickTransparentColorTargetLayerId)
       if (layer && layer.kind === 'image' && layer.width > 0 && layer.height > 0) {
@@ -1622,6 +1679,8 @@ export class SvgCanvas {
     // component never *needs* to be grabbed from an exact port pixel.
     const target = evt.target as Element
     const resizeHandleEl = target.closest('[data-resize-handle]') as SVGElement | null
+    const shapePointHandleEl = target.closest('[data-shape-point-index]') as SVGElement | null
+    const connectionPointHandleEl = target.closest('[data-cp-point-id]') as SVGElement | null
     const endpointEl = target.closest('[data-pipe-endpoint]') as SVGElement | null
     const waypointEl = target.closest('[data-waypoint-index]') as SVGElement | null
     const roleEl = target.closest('[data-role]') as SVGGElement | null
@@ -1670,6 +1729,35 @@ export class SvgCanvas {
       return
     }
 
+    if (shapePointHandleEl) {
+      const shapeId = shapePointHandleEl.getAttribute('data-shape-id')!
+      const pointIndex = Number(shapePointHandleEl.getAttribute('data-shape-point-index'))
+      const shape = this.latestShapes.find((s) => s.instanceId === shapeId)
+      if (shape) {
+        this.callbacks.onDragCheckpoint()
+        this.dragMode = 'resize-shape-point'
+        this.dragShapeId = shapeId
+        this.dragShapePointIndex = pointIndex
+        this.dragShapeStartPoints = shape.points.map((p) => ({ ...p }))
+      }
+      return
+    }
+
+    if (connectionPointHandleEl) {
+      const ownerKind = connectionPointHandleEl.getAttribute('data-cp-owner-kind') as 'layer' | 'shape'
+      const ownerId = connectionPointHandleEl.getAttribute('data-cp-owner-id')!
+      const pointId = connectionPointHandleEl.getAttribute('data-cp-point-id')!
+      this.callbacks.onDragCheckpoint()
+      this.selectedConnectionPoint = { ownerKind, ownerId, pointId }
+      this.callbacks.onConnectionPointSelected(this.selectedConnectionPoint)
+      this.refreshConnectionPointHandles()
+      this.dragMode = 'move-connection-point'
+      this.dragConnectionPointOwnerKind = ownerKind
+      this.dragConnectionPointOwnerId = ownerId
+      this.dragConnectionPointId = pointId
+      return
+    }
+
     if (endpointEl) {
       const pipeId = endpointEl.getAttribute('data-pipe-id')!
       const side = endpointEl.getAttribute('data-pipe-endpoint') as PipeEndpointSide
@@ -1682,7 +1770,7 @@ export class SvgCanvas {
       // threshold) and only performs the cycle if the pointer never
       // actually moved.
       const pipe = this.latestPipes.find((p) => p.instanceId === pipeId)
-      const points = pipe && getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+      const points = pipe && getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
       const pos = points ? (side === 'from' ? points[0] : points[points.length - 1]) : null
       this.pipePointCycleCandidate =
         pos && this.selectedEndpoint?.pipeId === pipeId && this.selectedEndpoint.side === side
@@ -1768,8 +1856,31 @@ export class SvgCanvas {
       // group with an identical transform") must still select the whole
       // group first — otherwise grouping felt inconsistent across component
       // types purely because of which of their parts a click happened to
-      // land on (e.g. valves vs. gas bottles vs. pipes).
+      // land on (e.g. valves vs. gas bottles vs. pipes). Always called for
+      // its enteredGroupId side effect, but its result is only ACTED on
+      // below when this instance isn't already part of a larger selection —
+      // see partOfGroup's doc comment just below for why order matters here.
       const redirectGroup = this.groupRedirectFor('instance', instanceId)
+
+      // Checked BEFORE acting on redirectGroup: if this instance is already
+      // part of a larger selection (a loose mixed multi-select, OR a
+      // persisted Group that's the current selection, OR either of those
+      // plus extra elements added alongside it), a plain click+drag here
+      // must carry that ENTIRE current selection along — redirecting to
+      // "just this instance's own persisted group" would silently drop any
+      // extra elements selected alongside it. Only a click on something NOT
+      // already selected should redirect into a fresh group selection.
+      const partOfGroup =
+        this.selectedInstanceIds.includes(instanceId) &&
+        (this.totalSelectedCount() > 1 || this.companionPipePoints.length > 0)
+
+      if (partOfGroup) {
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
+        return
+      }
+
       if (redirectGroup) {
         this.callbacks.onGroupSelected(redirectGroup.groupId)
         this.dragMode = 'move-group'
@@ -1809,12 +1920,34 @@ export class SvgCanvas {
       }
 
       // Clicking a member of a persisted Group (that we're not already
-      // "entered" into, see enteredGroupId) selects the whole group and
-      // starts a group-drag of it instead of this one instance —
-      // PowerPoint-style. Takes priority over the loose-multi-select
-      // "partOfGroup" check just below, which is a different, older concept
-      // (a transient multi-select, not a persisted Group).
+      // "entered" into, see enteredGroupId) normally selects the whole group
+      // and starts a group-drag of it instead of this one instance —
+      // PowerPoint-style. Always called for its enteredGroupId side effect,
+      // but its result is only acted on below (after the partOfGroup check)
+      // — see that check's own doc comment for why order matters.
       const redirectGroup = this.groupRedirectFor('instance', instanceId)
+
+      // Checked BEFORE acting on redirectGroup: also true for a single
+      // already-selected instance that's part of a larger mixed selection
+      // (any combination of instances/pipes/shapes/leader lines/layers — not
+      // just 2+ instances, and regardless of whether that selection happens
+      // to exactly match a persisted Group or include extra elements
+      // alongside one) or has companion pipe knots from a box-select (see
+      // companionPipePoints). Redirecting to "just this instance's own
+      // persisted group" here would silently drop any extra elements
+      // selected alongside it — a plain click+drag on something already
+      // selected must carry the ENTIRE current selection, never narrow it.
+      const partOfGroup =
+        this.selectedInstanceIds.includes(instanceId) &&
+        (this.totalSelectedCount() > 1 || this.companionPipePoints.length > 0)
+
+      if (partOfGroup) {
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
+        return
+      }
+
       if (redirectGroup) {
         this.callbacks.onGroupSelected(redirectGroup.groupId)
         this.dragMode = 'move-group'
@@ -1824,43 +1957,13 @@ export class SvgCanvas {
         return
       }
 
-      // Also true for a single already-selected instance that's part of a
-      // larger mixed selection (any combination of instances/pipes/shapes/
-      // leader lines — not just 2+ instances) or has companion pipe knots
-      // from a box-select (see companionPipePoints) — re-running
-      // setSelectionFromUser here would wipe the rest of that selection
-      // right before it's read below, even though the instance itself
-      // doesn't need re-selecting.
-      const partOfGroup =
-        this.selectedInstanceIds.includes(instanceId) &&
-        (this.totalSelectedCount() > 1 || this.companionPipePoints.length > 0)
-
-      if (!partOfGroup) {
-        this.setSelectionFromUser([instanceId])
-      }
-
-      // Also routes a *single* selected instance through the group-drag
-      // mechanism whenever it's part of a larger mixed selection or has
-      // companion pipe knots (see finalizeBoxSelect) — group-drag is
-      // delta-based (origin + delta) and beginGroupDrag reads the live
-      // selectedPipeIds/selectedShapeIds/selectedLeaderLineIds directly from
-      // store state (not from the instanceIds passed in here), so this is
-      // what carries a selected pipe/shape/leader line along even when the
-      // drag started on an instance and only one instance is selected;
-      // plain move-instance only ever reports an absolute new position and
-      // touches nothing else.
-      if (partOfGroup) {
-        this.dragMode = 'move-group'
-        this.groupDragStartWorld = world
-        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
-      } else {
-        this.callbacks.onDragCheckpoint()
-        this.dragMode = 'move-instance'
-        this.dragInstanceId = instanceId
-        this.dragStartScreen = { x: evt.clientX, y: evt.clientY }
-        const inst = this.latestInstances.find((i) => i.instanceId === instanceId)
-        this.dragInstanceStartPos = inst ? { x: inst.transform.x, y: inst.transform.y } : world
-      }
+      this.setSelectionFromUser([instanceId])
+      this.callbacks.onDragCheckpoint()
+      this.dragMode = 'move-instance'
+      this.dragInstanceId = instanceId
+      this.dragStartScreen = { x: evt.clientX, y: evt.clientY }
+      const inst = this.latestInstances.find((i) => i.instanceId === instanceId)
+      this.dragInstanceStartPos = inst ? { x: inst.transform.x, y: inst.transform.y } : world
       return
     }
 
@@ -1885,7 +1988,22 @@ export class SvgCanvas {
         this.toggleMemberInSelection('shape', shapeId)
         return
       }
+      // Always called for its enteredGroupId side effect, but only acted on
+      // below (after the partOfGroup check) — see instanceEl's own doc
+      // comment for why: redirecting to "just this shape's own persisted
+      // group" would drop any extra elements already selected alongside it.
       const redirectGroup = this.groupRedirectFor('shape', shapeId)
+      // Same "already part of a larger mixed selection" carry-along as the
+      // instanceEl branch above — a selected shape being dragged alongside a
+      // selected leader line (or pipe) must not collapse down to just this
+      // shape.
+      const partOfGroup = this.selectedShapeIds.includes(shapeId) && this.totalSelectedCount() > 1
+      if (partOfGroup) {
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
+        return
+      }
       if (redirectGroup) {
         this.callbacks.onGroupSelected(redirectGroup.groupId)
         this.dragMode = 'move-group'
@@ -1894,20 +2012,7 @@ export class SvgCanvas {
         this.callbacks.onGroupDragStart(memberInstanceIds, [])
         return
       }
-      // Same "already part of a larger mixed selection" carry-along as the
-      // instanceEl branch above — a selected shape being dragged alongside a
-      // selected leader line (or pipe) must not collapse down to just this
-      // shape.
-      const partOfGroup = this.selectedShapeIds.includes(shapeId) && this.totalSelectedCount() > 1
-      if (!partOfGroup) {
-        this.setShapeSelectionFromUser([shapeId])
-      }
-      if (partOfGroup) {
-        this.dragMode = 'move-group'
-        this.groupDragStartWorld = world
-        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
-        return
-      }
+      this.setShapeSelectionFromUser([shapeId])
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-shape'
       this.dragShapeId = shapeId
@@ -1941,8 +2046,32 @@ export class SvgCanvas {
     if (layerEl) {
       const layerId = layerEl.getAttribute('data-layer-id')!
       const layer = this.latestLayers.find((l) => l.layerId === layerId)
+      if (isMultiSelectModifier(evt)) {
+        this.toggleMemberInSelection('layer', layerId)
+        return
+      }
+      // Always called for its enteredGroupId side effect, but only acted on
+      // below (after the partOfGroup check) — see instanceEl's own doc
+      // comment for why: redirecting to "just this layer's own persisted
+      // group" would drop any extra elements already selected alongside it.
+      const redirectGroup = this.groupRedirectFor('layer', layerId)
+      const partOfGroup = this.selectedLayerIds.includes(layerId) && this.totalSelectedCount() > 1
+      if (partOfGroup) {
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        this.callbacks.onGroupDragStart(this.selectedInstanceIds, this.companionPipePoints)
+        return
+      }
+      if (redirectGroup) {
+        this.callbacks.onGroupSelected(redirectGroup.groupId)
+        this.dragMode = 'move-group'
+        this.groupDragStartWorld = world
+        const memberInstanceIds = redirectGroup.members.filter((m) => m.kind === 'instance').map((m) => m.id)
+        this.callbacks.onGroupDragStart(memberInstanceIds, [])
+        return
+      }
+      this.setLayerSelectionFromUser([layerId])
       this.enteredGroupId = null
-      this.setLayerSelectionFromUser(layerId)
       this.callbacks.onDragCheckpoint()
       this.dragMode = 'move-layer'
       this.dragLayerId = layerId
@@ -2022,6 +2151,44 @@ export class SvgCanvas {
       const snappedDelta = this.snapToGrid(delta)
       const newPoints = this.dragShapeStartPoints.map((p) => ({ x: p.x + snappedDelta.x, y: p.y + snappedDelta.y }))
       this.callbacks.onShapeMoved(this.dragShapeId, newPoints)
+      return
+    }
+
+    if (this.dragMode === 'resize-shape-point' && this.dragShapeId && this.dragShapePointIndex !== null) {
+      const world = this.screenToWorld(evt.clientX, evt.clientY)
+      const snapped = this.snapToGrid(world)
+      const newPoints = this.dragShapeStartPoints.map((p, i) => (i === this.dragShapePointIndex ? snapped : p))
+      this.callbacks.onShapeMoved(this.dragShapeId, newPoints)
+      return
+    }
+
+    if (
+      this.dragMode === 'move-connection-point' &&
+      this.dragConnectionPointOwnerKind &&
+      this.dragConnectionPointOwnerId &&
+      this.dragConnectionPointId
+    ) {
+      const world = this.screenToWorld(evt.clientX, evt.clientY)
+      if (this.dragConnectionPointOwnerKind === 'layer') {
+        const layer = this.latestLayers.find((l) => l.layerId === this.dragConnectionPointOwnerId)
+        if (layer && layer.kind === 'image' && layer.width > 0 && layer.height > 0) {
+          const relX = clamp01((world.x - layer.x) / layer.width)
+          const relY = clamp01((world.y - layer.y) / layer.height)
+          this.callbacks.onConnectionPointMoved('layer', layer.layerId, this.dragConnectionPointId, relX, relY)
+        }
+      } else {
+        const shape = this.latestShapes.find((s) => s.instanceId === this.dragConnectionPointOwnerId)
+        if (shape) {
+          const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+          const width = maxX - minX
+          const height = maxY - minY
+          if (width > 0 && height > 0) {
+            const relX = clamp01((world.x - minX) / width)
+            const relY = clamp01((world.y - minY) / height)
+            this.callbacks.onConnectionPointMoved('shape', shape.instanceId, this.dragConnectionPointId, relX, relY)
+          }
+        }
+      }
       return
     }
 
@@ -2147,11 +2314,23 @@ export class SvgCanvas {
 
     if (this.dragMode === 'move-pipe-endpoint' && this.dragPipeId !== null && this.dragEndpointSide !== null) {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
-      // Port-snap takes priority (matches draw-pipe's own snap behavior);
-      // dropped anywhere else it's a bare grid-snapped free point, which is
-      // exactly how disconnecting this end from a component works.
+      // Port-snap takes priority (matches draw-pipe's own snap behavior).
+      // Dropped anywhere else it becomes a bare free point — exactly how
+      // disconnecting this end from a component works — so that case gets
+      // the same alignment-guide ("orange line") snap-to-other-elements
+      // behavior draw-pipe and move-waypoint already have, instead of a
+      // plain grid-only snap.
       const hit = this.findPortNear(world, this.dragPipeId)
-      const target: PortRef | FreePoint = hit ? hit.ref : this.snapToGrid(world)
+      let target: PortRef | FreePoint
+      if (hit) {
+        target = hit.ref
+        this.hideAlignGuides()
+      } else {
+        const aligned = this.snapWithAlignmentOrGrid(world, this.collectAlignReferences())
+        target = aligned.point
+        if (aligned.guideX !== null || aligned.guideY !== null) this.showAlignGuides(aligned.guideX, aligned.guideY)
+        else this.hideAlignGuides()
+      }
       this.callbacks.onPipeEndpointMoved(this.dragPipeId, this.dragEndpointSide, target)
       return
     }
@@ -2307,6 +2486,10 @@ export class SvgCanvas {
     this.dragPipeId = null
     this.dragWaypointIndex = null
     this.dragShapeId = null
+    this.dragShapePointIndex = null
+    this.dragConnectionPointOwnerKind = null
+    this.dragConnectionPointOwnerId = null
+    this.dragConnectionPointId = null
     this.dragLeaderLineId = null
     this.dragLeaderLinePoint = null
     this.dragLayerId = null
@@ -2352,27 +2535,46 @@ export class SvgCanvas {
     const matchedInstances = this.latestInstances.filter((inst) => within(inst.transform)).map((i) => i.instanceId)
     const matchedPipes = this.latestPipes
       .filter((pipe) => {
-        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
         return points?.some(within) ?? false
       })
       .map((p) => p.instanceId)
-    const matchedShapes = this.latestShapes.filter((shape) => shape.points.some(within)).map((s) => s.instanceId)
+    const matchedShapes = this.latestShapes
+      .filter((shape) => {
+        const shapeLayer = this.latestLayers.find((l) => l.layerId === (shape.layerId || 'default'))
+        if (shapeLayer?.locked) return false
+        return shape.points.some(within)
+      })
+      .map((s) => s.instanceId)
     const matchedLeaderLines = this.latestLeaderLines
       .filter((line) => {
         const points = getLeaderLinePoints(line, this.latestInstances, this.latestPipes, this.latestShapes, this.latestLayers)
         return points?.some(within) ?? false
       })
       .map((l) => l.instanceId)
+    const matchedLayers = this.latestLayers
+      .filter((l) => {
+        if (l.kind !== 'image' || l.locked) return false
+        const corners = [
+          { x: l.x, y: l.y },
+          { x: l.x + l.width, y: l.y },
+          { x: l.x, y: l.y + l.height },
+          { x: l.x + l.width, y: l.y + l.height },
+        ]
+        return corners.some(within)
+      })
+      .map((l) => l.layerId)
 
     const nothingMatched =
       matchedInstances.length === 0 &&
       matchedPipes.length === 0 &&
       matchedShapes.length === 0 &&
-      matchedLeaderLines.length === 0
+      matchedLeaderLines.length === 0 &&
+      matchedLayers.length === 0
 
     if (nothingMatched && !this.boxSelectAdditive) {
       // Nothing in the box at all — clears every selection category, same as before.
-      this.setMixedSelectionFromUser({ instanceIds: [], pipeIds: [], shapeIds: [], leaderLineIds: [] })
+      this.setMixedSelectionFromUser({ instanceIds: [], pipeIds: [], shapeIds: [], leaderLineIds: [], layerIds: [] })
       if (this.boxSelectRectEl) this.boxSelectRectEl.style.display = 'none'
       return
     }
@@ -2391,6 +2593,7 @@ export class SvgCanvas {
     let pipesForSelection = matchedPipes
     let shapesForSelection = matchedShapes
     let leaderLinesForSelection = matchedLeaderLines
+    let layersForSelection = matchedLayers
 
     if (!this.boxSelectAdditive) {
       const touchedGroups = this.latestGroups.filter((g) =>
@@ -2399,7 +2602,8 @@ export class SvgCanvas {
             (m.kind === 'instance' && matchedInstances.includes(m.id)) ||
             (m.kind === 'pipe' && matchedPipes.includes(m.id)) ||
             (m.kind === 'shape' && matchedShapes.includes(m.id)) ||
-            (m.kind === 'leaderLine' && matchedLeaderLines.includes(m.id)),
+            (m.kind === 'leaderLine' && matchedLeaderLines.includes(m.id)) ||
+            (m.kind === 'layer' && matchedLayers.includes(m.id)),
         ),
       )
       if (touchedGroups.length > 0) {
@@ -2407,11 +2611,13 @@ export class SvgCanvas {
         const expandedPipes = new Set(matchedPipes)
         const expandedShapes = new Set(matchedShapes)
         const expandedLeaderLines = new Set(matchedLeaderLines)
+        const expandedLayers = new Set(matchedLayers)
         for (const group of touchedGroups) {
           for (const m of group.members) {
             if (m.kind === 'instance') expandedInstances.add(m.id)
             else if (m.kind === 'pipe') expandedPipes.add(m.id)
             else if (m.kind === 'shape') expandedShapes.add(m.id)
+            else if (m.kind === 'layer') expandedLayers.add(m.id)
             else expandedLeaderLines.add(m.id)
           }
         }
@@ -2419,6 +2625,7 @@ export class SvgCanvas {
         pipesForSelection = Array.from(expandedPipes)
         shapesForSelection = Array.from(expandedShapes)
         leaderLinesForSelection = Array.from(expandedLeaderLines)
+        layersForSelection = Array.from(expandedLayers)
 
         const exactGroup = this.latestGroups.find((g) =>
           this.membersMatchSelection(g, {
@@ -2426,6 +2633,7 @@ export class SvgCanvas {
             pipeIds: pipesForSelection,
             shapeIds: shapesForSelection,
             leaderLineIds: leaderLinesForSelection,
+            layerIds: layersForSelection,
           }),
         )
         if (exactGroup) {
@@ -2450,12 +2658,16 @@ export class SvgCanvas {
     const nextLeaderLines = this.boxSelectAdditive
       ? Array.from(new Set([...this.selectedLeaderLineIds, ...leaderLinesForSelection]))
       : leaderLinesForSelection
+    const nextLayers = this.boxSelectAdditive
+      ? Array.from(new Set([...this.selectedLayerIds, ...layersForSelection]))
+      : layersForSelection
 
     this.setMixedSelectionFromUser({
       instanceIds: nextInstances,
       pipeIds: nextPipes,
       shapeIds: nextShapes,
       leaderLineIds: nextLeaderLines,
+      layerIds: nextLayers,
     })
 
     // "Mark knots like elements": a free pipe knot (interior waypoint, or a
@@ -2465,7 +2677,7 @@ export class SvgCanvas {
     // (just above) clears this field first, so it's safe to set it after.
     if (matchedInstances.length > 0) {
       for (const pipe of this.latestPipes) {
-        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+        const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
         if (!points) continue
         points.forEach((pos, idx) => {
           if (!within(pos)) return
@@ -2525,6 +2737,7 @@ export class SvgCanvas {
       pipe: new Set(this.selectedPipeIds),
       shape: new Set(this.selectedShapeIds),
       leaderLine: new Set(this.selectedLeaderLineIds),
+      layer: new Set(this.selectedLayerIds),
     }
     const allPresent = targets.every((m) => sets[m.kind].has(m.id))
     for (const m of targets) {
@@ -2536,6 +2749,7 @@ export class SvgCanvas {
       pipeIds: Array.from(sets.pipe),
       shapeIds: Array.from(sets.shape),
       leaderLineIds: Array.from(sets.leaderLine),
+      layerIds: Array.from(sets.layer),
     }
 
     // If the resulting selection happens to exactly equal some persisted
@@ -2554,16 +2768,21 @@ export class SvgCanvas {
   /** True when `group`'s full membership exactly equals the given four-array selection — shared by isCurrentGroupSelection (against the live canvas selection) and toggleMemberInSelection (against a not-yet-applied candidate selection). */
   private membersMatchSelection(
     group: Group,
-    selection: { instanceIds: string[]; pipeIds: string[]; shapeIds: string[]; leaderLineIds: string[] },
+    selection: { instanceIds: string[]; pipeIds: string[]; shapeIds: string[]; leaderLineIds: string[]; layerIds: string[] },
   ): boolean {
     const total =
-      selection.instanceIds.length + selection.pipeIds.length + selection.shapeIds.length + selection.leaderLineIds.length
+      selection.instanceIds.length +
+      selection.pipeIds.length +
+      selection.shapeIds.length +
+      selection.leaderLineIds.length +
+      selection.layerIds.length
     if (group.members.length !== total) return false
     const sets: Record<GroupMemberKind, Set<string>> = {
       instance: new Set(selection.instanceIds),
       pipe: new Set(selection.pipeIds),
       shape: new Set(selection.shapeIds),
       leaderLine: new Set(selection.leaderLineIds),
+      layer: new Set(selection.layerIds),
     }
     return group.members.every((m) => sets[m.kind].has(m.id))
   }
@@ -2573,24 +2792,27 @@ export class SvgCanvas {
     pipeIds: string[]
     shapeIds: string[]
     leaderLineIds: string[]
+    layerIds: string[]
   }) {
     this.setRoleSelectionFromUser(null)
     this.applySelectionHighlight(selection.instanceIds)
     this.applyPipeSelectionHighlight(selection.pipeIds)
     this.applyShapeSelectionHighlight(selection.shapeIds)
     this.applyLeaderLineSelectionHighlight(selection.leaderLineIds)
+    this.applyLayerSelectionHighlight(selection.layerIds)
     this.companionPipePoints = []
     this.refreshCompanionPipePointHandles()
     this.callbacks.onMixedSelectionChanged(selection)
   }
 
-  /** Combined size of the current selection across all four kinds — used to decide whether dragging an already-selected instance/shape should carry the rest of a mixed selection along (group-drag) instead of collapsing to just the clicked item. */
+  /** Combined size of the current selection across all five kinds — used to decide whether dragging an already-selected instance/shape/layer should carry the rest of a mixed selection along (group-drag) instead of collapsing to just the clicked item. */
   private totalSelectedCount(): number {
     return (
       this.selectedInstanceIds.length +
       this.selectedPipeIds.length +
       this.selectedShapeIds.length +
-      this.selectedLeaderLineIds.length
+      this.selectedLeaderLineIds.length +
+      this.selectedLayerIds.length
     )
   }
 
@@ -2606,6 +2828,7 @@ export class SvgCanvas {
       pipeIds: this.selectedPipeIds,
       shapeIds: this.selectedShapeIds,
       leaderLineIds: this.selectedLeaderLineIds,
+      layerIds: this.selectedLayerIds,
     })
   }
 
@@ -2630,6 +2853,7 @@ export class SvgCanvas {
     if (kind === 'instance') this.setSelectionFromUser([id])
     else if (kind === 'pipe') this.setPipeSelectionFromUser([id])
     else if (kind === 'shape') this.setShapeSelectionFromUser([id])
+    else if (kind === 'layer') this.setLayerSelectionFromUser([id])
     else this.setLeaderLineSelectionFromUser([id])
   }
 
@@ -2812,6 +3036,8 @@ export class SvgCanvas {
       this.shapeEls.get(id)?.classList.add('gv-selected')
     }
     this.selectedShapeIds = shapeIds
+    this.refreshShapeResizeHandles()
+    this.refreshConnectionPointHandles()
   }
 
   private setLeaderLineSelectionFromUser(leaderLineIds: string[]) {
@@ -2862,28 +3088,35 @@ export class SvgCanvas {
     if (toPos) addHandle(toPos, 'to')
   }
 
-  private setLayerSelectionFromUser(layerId: string | null) {
+  private setLayerSelectionFromUser(layerIds: string[]) {
     this.setRoleSelectionFromUser(null)
-    this.applyLayerSelectionHighlight(layerId)
-    this.callbacks.onLayerSelected(layerId)
+    this.applyLayerSelectionHighlight(layerIds)
+    this.callbacks.onLayerSelectionChanged(layerIds)
   }
 
   /** External sync (e.g. selected via the layers panel): highlight only, no callback. */
-  setLayerSelection(layerId: string | null) {
-    this.applyLayerSelectionHighlight(layerId)
+  setLayerSelection(layerIds: string[]) {
+    this.applyLayerSelectionHighlight(layerIds)
   }
 
-  private applyLayerSelectionHighlight(layerId: string | null) {
-    if (this.selectedLayerId) {
-      this.imageLayerEls.get(this.selectedLayerId)?.classList.remove('gv-selected')
+  /** External sync (e.g. cleared by Escape, or selected via a connection-point list row in the panel): highlight only, no callback. */
+  setConnectionPointSelection(selection: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null) {
+    this.selectedConnectionPoint = selection
+    this.refreshConnectionPointHandles()
+  }
+
+  private applyLayerSelectionHighlight(layerIds: string[]) {
+    for (const id of this.selectedLayerIds) {
+      if (!layerIds.includes(id)) this.imageLayerEls.get(id)?.classList.remove('gv-selected')
     }
-    this.selectedLayerId = layerId
-    if (layerId) {
-      this.imageLayerEls.get(layerId)?.classList.add('gv-selected')
+    for (const id of layerIds) {
+      this.imageLayerEls.get(id)?.classList.add('gv-selected')
     }
+    this.selectedLayerIds = layerIds
     // The selected layer's own connection points are shown/hidden based on selection.
     this.refreshPortMarkers()
     this.refreshLayerResizeHandles()
+    this.refreshConnectionPointHandles()
   }
 
   private setWaypointSelectionFromUser(selection: WaypointSelection | null) {
@@ -2938,7 +3171,7 @@ export class SvgCanvas {
     // interior waypoint — dropped near another valid target it reattaches
     // there, dropped in empty space it becomes a fixed free point
     // (deliberately disconnecting that end from whatever it was attached to).
-    const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers)
+    const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
     if (points && points.length >= 2) {
       const ends: Array<{ side: PipeEndpointSide; pos: Point }> = [
         { side: 'from', pos: points[0] },
@@ -3005,8 +3238,10 @@ export class SvgCanvas {
     while (this.layerResizeHandlesGroup.firstChild) {
       this.layerResizeHandlesGroup.removeChild(this.layerResizeHandlesGroup.firstChild)
     }
-    if (!this.selectedLayerId) return
-    const layer = this.latestLayers.find((l) => l.layerId === this.selectedLayerId)
+    // See refreshInstanceResizeHandles's doc comment — same "part of a
+    // larger mixed selection" guard, not just "exactly one image selected".
+    if (this.totalSelectedCount() !== 1 || this.selectedLayerIds.length !== 1) return
+    const layer = this.latestLayers.find((l) => l.layerId === this.selectedLayerIds[0])
     if (!layer || layer.kind !== 'image' || layer.locked) return
 
     const corners: { handle: ResizeHandle; pos: Point; cursor: string }[] = [
@@ -3042,7 +3277,13 @@ export class SvgCanvas {
     while (this.instanceResizeHandlesGroup.firstChild) {
       this.instanceResizeHandlesGroup.removeChild(this.instanceResizeHandlesGroup.firstChild)
     }
-    if (this.selectedInstanceIds.length !== 1) return
+    // totalSelectedCount, not just selectedInstanceIds.length — a resizable
+    // instance that's merely one member of a larger mixed selection (e.g.
+    // grouped with a pipe/shape/image) must NOT show corner handles, or
+    // clicking one hijacks what should be a whole-group drag into a lone
+    // resize-instance drag on just this instance (see the pointerdown
+    // priority: resizeHandleEl is checked before the group-drag logic).
+    if (this.totalSelectedCount() !== 1 || this.selectedInstanceIds.length !== 1) return
     const instance = this.latestInstances.find((i) => i.instanceId === this.selectedInstanceIds[0])
     if (!instance) return
     const def = getComponentType(instance.componentTypeId)
@@ -3082,6 +3323,99 @@ export class SvgCanvas {
       rect.setAttribute('data-resize-handle', c.handle)
       rect.style.cursor = c.cursor
       this.instanceResizeHandlesGroup.appendChild(rect)
+    }
+  }
+
+  /**
+   * One draggable handle per point of the single selected free shape — since
+   * FreeShape.points already *is* its editable geometry (rect/ellipse: 2
+   * opposite corners; line: 2 endpoints; polygon: 3+ vertices), dragging any
+   * handle just moves that one point via the existing onShapeMoved callback,
+   * no separate resize math needed. Text is excluded — its single point is
+   * an anchor, not a corner, already covered by the ordinary move drag.
+   */
+  private refreshShapeResizeHandles() {
+    while (this.shapeResizeHandlesGroup.firstChild) {
+      this.shapeResizeHandlesGroup.removeChild(this.shapeResizeHandlesGroup.firstChild)
+    }
+    // See refreshInstanceResizeHandles's doc comment — same "part of a
+    // larger mixed selection" guard, not just "exactly one shape selected".
+    if (this.totalSelectedCount() !== 1 || this.selectedShapeIds.length !== 1) return
+    const shape = this.latestShapes.find((s) => s.instanceId === this.selectedShapeIds[0])
+    if (!shape || shape.kind === 'text') return
+    const shapeLayer = this.latestLayers.find((l) => l.layerId === (shape.layerId || 'default'))
+    if (shapeLayer?.locked) return
+
+    const size = this.worldThreshold(10)
+    shape.points.forEach((p, index) => {
+      const rect = document.createElementNS(SVG_NS, 'rect')
+      rect.setAttribute('x', String(p.x - size / 2))
+      rect.setAttribute('y', String(p.y - size / 2))
+      rect.setAttribute('width', String(size))
+      rect.setAttribute('height', String(size))
+      rect.setAttribute('class', 'gv-shape-resize-handle')
+      rect.setAttribute('data-shape-id', shape.instanceId)
+      rect.setAttribute('data-shape-point-index', String(index))
+      rect.style.cursor = 'move'
+      this.shapeResizeHandlesGroup.appendChild(rect)
+    })
+  }
+
+  /**
+   * Real interactive (click-to-select, drag-to-reposition) handles for the
+   * connection points of the single selected image layer or shape — distinct
+   * from portMarkersGroup's non-interactive snap-target previews. Same
+   * "part of a larger mixed selection" single-target guard as the resize
+   * handles.
+   */
+  private refreshConnectionPointHandles() {
+    while (this.connectionPointHandlesGroup.firstChild) {
+      this.connectionPointHandlesGroup.removeChild(this.connectionPointHandlesGroup.firstChild)
+    }
+    if (this.totalSelectedCount() !== 1) return
+
+    let ownerKind: 'layer' | 'shape'
+    let ownerId: string
+    let points: { pointId: string; pos: Point }[]
+
+    if (this.selectedLayerIds.length === 1) {
+      const layer = this.latestLayers.find((l) => l.layerId === this.selectedLayerIds[0])
+      if (!layer || layer.kind !== 'image' || layer.locked) return
+      ownerKind = 'layer'
+      ownerId = layer.layerId
+      points = layer.connectionPoints
+        .map((cp) => ({ pointId: cp.pointId, pos: getImageConnectionPointWorldPosition(layer, cp.pointId) }))
+        .filter((p): p is { pointId: string; pos: Point } => p.pos !== null)
+    } else if (this.selectedShapeIds.length === 1) {
+      const shape = this.latestShapes.find((s) => s.instanceId === this.selectedShapeIds[0])
+      if (!shape) return
+      const shapeLayer = this.latestLayers.find((l) => l.layerId === (shape.layerId || 'default'))
+      if (shapeLayer?.locked) return
+      ownerKind = 'shape'
+      ownerId = shape.instanceId
+      points = (shape.connectionPoints ?? [])
+        .map((cp) => ({ pointId: cp.pointId, pos: getShapeConnectionPointWorldPosition(shape, cp.pointId) }))
+        .filter((p): p is { pointId: string; pos: Point } => p.pos !== null)
+    } else {
+      return
+    }
+
+    const radius = this.worldThreshold(5)
+    for (const { pointId, pos } of points) {
+      const isSelected =
+        this.selectedConnectionPoint?.ownerKind === ownerKind &&
+        this.selectedConnectionPoint?.ownerId === ownerId &&
+        this.selectedConnectionPoint?.pointId === pointId
+      const c = document.createElementNS(SVG_NS, 'circle')
+      c.setAttribute('cx', String(pos.x))
+      c.setAttribute('cy', String(pos.y))
+      c.setAttribute('r', String(radius))
+      c.setAttribute('class', isSelected ? 'gv-connection-point-handle gv-selected' : 'gv-connection-point-handle')
+      c.setAttribute('data-cp-owner-kind', ownerKind)
+      c.setAttribute('data-cp-owner-id', ownerId)
+      c.setAttribute('data-cp-point-id', pointId)
+      c.style.cursor = 'move'
+      this.connectionPointHandlesGroup.appendChild(c)
     }
   }
 
@@ -3174,7 +3508,7 @@ export class SvgCanvas {
     const pointsByPipe = new Map<string, Point[]>()
     const displayPointsByPipe = new Map<string, Point[]>()
     for (const pipe of pipes) {
-      const pts = getPipePoints(pipe, instances, pipes, this.latestLayers)
+      const pts = getPipePoints(pipe, instances, pipes, this.latestLayers, this.latestShapes)
       if (pts) {
         pointsByPipe.set(pipe.instanceId, pts)
         displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
@@ -3341,7 +3675,7 @@ export class SvgCanvas {
         img.setAttribute('height', String(layer.height))
         img.setAttribute('opacity', String(layer.opacity))
         img.setAttribute('href', layer.src)
-        img.classList.toggle('gv-selected', layer.layerId === this.selectedLayerId)
+        img.classList.toggle('gv-selected', this.selectedLayerIds.includes(layer.layerId))
         // Locked (the default) means non-interactive — a reference image
         // shouldn't intercept clicks meant for the grid/content underneath
         // or on top, and can then only be selected/unlocked via the layers
@@ -3365,8 +3699,8 @@ export class SvgCanvas {
         this.vectorShapesSubEls.delete(id)
       }
     }
-    if (this.selectedLayerId && !seen.has(this.selectedLayerId)) {
-      this.selectedLayerId = null
+    if (this.selectedLayerIds.some((id) => !seen.has(id))) {
+      this.selectedLayerIds = this.selectedLayerIds.filter((id) => seen.has(id))
     }
 
     // Reorder: re-append every layer's outer group in array order
@@ -3380,6 +3714,7 @@ export class SvgCanvas {
 
     this.refreshPortMarkers()
     this.refreshLayerResizeHandles()
+    this.refreshConnectionPointHandles()
     // A pipe may be anchored to an image connection point — if this layer
     // sync is what just brought those coordinates in (or moved them), pipe
     // geometry needs to be recomputed too, not just wait for its own next
@@ -3412,7 +3747,10 @@ export class SvgCanvas {
       // actually relocate its DOM on the next sync.
       const { shapesSub } = this.getOrCreateVectorLayerSubGroups(shape.layerId || 'default')
       shapesSub.appendChild(group)
-      this.renderShapeInto(group, shape)
+      const layer = this.latestLayers.find((l) => l.layerId === (shape.layerId || 'default'))
+      const locked = layer?.locked ?? false
+      group.style.cursor = locked ? 'default' : 'move'
+      this.renderShapeInto(group, shape, locked)
     }
 
     for (const [id, el] of this.shapeEls) {
@@ -3425,6 +3763,8 @@ export class SvgCanvas {
     if (this.selectedShapeIds.some((id) => !seen.has(id))) {
       this.selectedShapeIds = this.selectedShapeIds.filter((id) => seen.has(id))
     }
+    this.refreshShapeResizeHandles()
+    this.refreshConnectionPointHandles()
   }
 
   /**
@@ -3498,9 +3838,10 @@ export class SvgCanvas {
     this.refreshLeaderLineHandles()
   }
 
-  private renderShapeInto(group: SVGGElement, shape: FreeShape) {
+  private renderShapeInto(group: SVGGElement, shape: FreeShape, locked = false) {
     while (group.firstChild) group.removeChild(group.firstChild)
     const fill = shape.style.fill ?? 'none'
+    const hitPointerEvents = locked ? 'none' : 'all'
 
     if (shape.kind === 'rect') {
       const { x, y, width, height } = rectAttrs(shape.points)
@@ -3513,8 +3854,10 @@ export class SvgCanvas {
       el.setAttribute('stroke', shape.style.stroke)
       el.setAttribute('stroke-width', String(shape.style.strokeWidth))
       // Makes the whole interior clickable even when fill="none" (default
-      // SVG hit-testing otherwise only responds to painted pixels).
-      el.setAttribute('pointer-events', 'all')
+      // SVG hit-testing otherwise only responds to painted pixels) — unless
+      // the shape's own layer is locked, in which case it shouldn't
+      // intercept clicks at all (same rule as a locked image layer).
+      el.setAttribute('pointer-events', hitPointerEvents)
       group.appendChild(el)
     } else if (shape.kind === 'ellipse') {
       const { cx, cy, rx, ry } = ellipseAttrs(shape.points)
@@ -3526,7 +3869,7 @@ export class SvgCanvas {
       el.setAttribute('fill', fill)
       el.setAttribute('stroke', shape.style.stroke)
       el.setAttribute('stroke-width', String(shape.style.strokeWidth))
-      el.setAttribute('pointer-events', 'all')
+      el.setAttribute('pointer-events', hitPointerEvents)
       group.appendChild(el)
     } else if (shape.kind === 'line') {
       const [a, b] = shape.points
@@ -3538,6 +3881,7 @@ export class SvgCanvas {
       hit.setAttribute('y2', String(b.y))
       hit.setAttribute('stroke', 'transparent')
       hit.setAttribute('stroke-width', String(Math.max(shape.style.strokeWidth + 10, 14)))
+      hit.style.pointerEvents = hitPointerEvents
       group.appendChild(hit)
 
       const el = document.createElementNS(SVG_NS, 'line')
@@ -3555,7 +3899,7 @@ export class SvgCanvas {
       el.setAttribute('fill', fill)
       el.setAttribute('stroke', shape.style.stroke)
       el.setAttribute('stroke-width', String(shape.style.strokeWidth))
-      el.setAttribute('pointer-events', 'all')
+      el.setAttribute('pointer-events', hitPointerEvents)
       group.appendChild(el)
     } else if (shape.kind === 'text') {
       const [a] = shape.points
@@ -3577,6 +3921,7 @@ export class SvgCanvas {
       hit.setAttribute('width', String(approxWidth + 2))
       hit.setAttribute('height', String(lineHeight * (lines.length - 1) + fontSize * 1.3))
       hit.setAttribute('fill', 'transparent')
+      hit.style.pointerEvents = hitPointerEvents
       group.appendChild(hit)
 
       const el = document.createElementNS(SVG_NS, 'text')

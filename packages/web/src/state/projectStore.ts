@@ -37,13 +37,17 @@ import { applyTransparentColor, samplePixelColor } from '../import/imageTranspar
 import { resizeImage } from '../import/imageResize'
 import { computePipeVolumeGroups, expandToVolumeSiblings } from '../pipes/pipeVolumes'
 import {
+  detachPipesFromConnectionPointOwners,
   detachPipesFromInstances,
   detachPipesFromPipes,
   getPipePoints,
+  getShapeConnectionPointWorldPosition,
   IMAGE_POINT_PREFIX,
   PIPE_POINT_PREFIX,
   pipePointPortId,
   resolvePortRefWorldPosition,
+  SHAPE_POINT_PREFIX,
+  shapePointPortId,
   shiftPipePointRefsForDelete,
   shiftPipePointRefsForInsert,
 } from '../pipes/pipeGeometry'
@@ -53,7 +57,7 @@ import {
   shiftLeaderLinePipeAnchorsForPipeChange,
 } from '../leaderLines/leaderLineGeometry'
 import { computeAutoRoute } from '../routing/autoRoute'
-import { DEFAULT_FONT_SIZE, DEFAULT_SHAPE_STYLE } from '../shapes/freeShapeGeometry'
+import { DEFAULT_FONT_SIZE, DEFAULT_SHAPE_STYLE, boundsOfPoints } from '../shapes/freeShapeGeometry'
 
 /** The one always-present vector content layer — instances/pipes/shapes all implicitly live here (no per-instance layer assignment UI yet). */
 const DEFAULT_VECTOR_LAYER: Layer = { layerId: 'default', name: 'Default', visible: true, locked: false, kind: 'vector' }
@@ -380,6 +384,7 @@ function gatherSelectionAsEntitySet(
     | 'selectedPipeIds'
     | 'selectedShapeIds'
     | 'selectedLeaderLineIds'
+    | 'selectedLayerIds'
     | 'selectedGroupId'
   >,
 ): ScryClipboardPayload {
@@ -387,16 +392,21 @@ function gatherSelectionAsEntitySet(
   const pipeIds = new Set(state.selectedPipeIds)
   const shapeIds = new Set(state.selectedShapeIds)
   const leaderLineIds = new Set(state.selectedLeaderLineIds)
+  const layerIds = new Set(state.selectedLayerIds)
 
   const openEndIfExternal = (ref: PortRef | FreePoint): PortRef | FreePoint => {
     if (!isPortRef(ref)) return ref
     const referencesUngatheredPipe = ref.portId.startsWith(PIPE_POINT_PREFIX) && !pipeIds.has(ref.instanceId)
+    const referencesUngatheredImage = ref.portId.startsWith(IMAGE_POINT_PREFIX) && !layerIds.has(ref.instanceId)
+    const referencesUngatheredShape = ref.portId.startsWith(SHAPE_POINT_PREFIX) && !shapeIds.has(ref.instanceId)
     const referencesUngatheredInstance =
       !ref.portId.startsWith(PIPE_POINT_PREFIX) &&
       !ref.portId.startsWith(IMAGE_POINT_PREFIX) &&
+      !ref.portId.startsWith(SHAPE_POINT_PREFIX) &&
       !instanceIds.has(ref.instanceId)
-    if (!referencesUngatheredPipe && !referencesUngatheredInstance) return ref
-    return resolvePortRefWorldPosition(ref, state.instances, state.pipes, state.layers) ?? ref
+    if (!referencesUngatheredPipe && !referencesUngatheredImage && !referencesUngatheredShape && !referencesUngatheredInstance)
+      return ref
+    return resolvePortRefWorldPosition(ref, state.instances, state.pipes, state.layers, state.freeShapes) ?? ref
   }
 
   const pipes = state.pipes
@@ -432,6 +442,7 @@ function gatherSelectionAsEntitySet(
     pipes,
     freeShapes: state.freeShapes.filter((s) => shapeIds.has(s.instanceId)),
     leaderLines,
+    layers: state.layers.filter((l): l is ImageLayer => l.kind === 'image' && layerIds.has(l.layerId)),
     groups: state.groups.filter((g) => g.groupId === state.selectedGroupId),
   }
 }
@@ -504,6 +515,12 @@ function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipbo
     }
   })
 
+  const layers = source.layers.map((layer) => {
+    const layerId = crypto.randomUUID()
+    idMap.set(layer.layerId, layerId)
+    return { ...layer, layerId, x: layer.x + offset.x, y: layer.y + offset.y }
+  })
+
   // Pass 2 — every kind's clone id now exists in idMap, so refs can be
   // resolved (or, for a ref outside the clone, deliberately left pointing
   // at the original).
@@ -533,7 +550,7 @@ function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipbo
     // up too small to remain meaningful.
     .filter((g) => g.members.length >= 2)
 
-  return { instances, pipes: remappedPipes, freeShapes, leaderLines: remappedLeaderLines, groups: remappedGroups }
+  return { instances, pipes: remappedPipes, freeShapes, leaderLines: remappedLeaderLines, layers, groups: remappedGroups }
 }
 
 /**
@@ -606,16 +623,31 @@ function applyPipeFlagToIds(
  */
 function computeMixedDeletion(
   state: Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'layers' | 'groups'>,
-  ids: { instanceIds: Set<string>; pipeIds: Set<string>; shapeIds: Set<string>; leaderLineIds: Set<string> },
-): Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'groups'> {
+  ids: {
+    instanceIds: Set<string>
+    pipeIds: Set<string>
+    shapeIds: Set<string>
+    leaderLineIds: Set<string>
+    layerIds?: Set<string>
+  },
+): Pick<ProjectState, 'instances' | 'pipes' | 'leaderLines' | 'freeShapes' | 'layers' | 'groups'> {
+  const layerIds = ids.layerIds ?? new Set<string>()
   return {
     instances: state.instances.filter((inst) => !ids.instanceIds.has(inst.instanceId)),
     pipes: recomputeVolumeTags(
-      detachPipesFromPipes(
-        detachPipesFromInstances(state.pipes, state.instances, ids.instanceIds),
+      detachPipesFromConnectionPointOwners(
+        detachPipesFromPipes(
+          detachPipesFromInstances(state.pipes, state.instances, ids.instanceIds),
+          state.instances,
+          state.layers,
+          ids.pipeIds,
+          state.freeShapes,
+        ),
         state.instances,
         state.layers,
-        ids.pipeIds,
+        state.freeShapes,
+        layerIds,
+        ids.shapeIds,
       ).filter((p) => !ids.pipeIds.has(p.instanceId)),
     ),
     leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
@@ -624,11 +656,13 @@ function computeMixedDeletion(
       shapeIds: ids.shapeIds,
     }).filter((l) => !ids.leaderLineIds.has(l.instanceId)),
     freeShapes: state.freeShapes.filter((s) => !ids.shapeIds.has(s.instanceId)),
+    layers: state.layers.filter((l) => !layerIds.has(l.layerId)),
     groups: stripDeletedGroupMembers(state.groups, {
       instance: ids.instanceIds,
       pipe: ids.pipeIds,
       shape: ids.shapeIds,
       leaderLine: ids.leaderLineIds,
+      layer: layerIds,
     }),
   }
 }
@@ -696,8 +730,8 @@ const ROLE_NUDGE_STEP = 0.5
 const ROLE_NUDGE_STEP_FAST = 5
 const WAYPOINT_NUDGE_STEP = 0.5
 const WAYPOINT_NUDGE_STEP_FAST = 5
-const SHAPE_NUDGE_STEP = 0.5
-const SHAPE_NUDGE_STEP_FAST = 20
+const CONNECTION_POINT_NUDGE_STEP = 0.5
+const CONNECTION_POINT_NUDGE_STEP_FAST = 5
 
 interface ProjectState {
   instances: ComponentInstance[]
@@ -715,9 +749,11 @@ interface ProjectState {
   /** Which point of the selected leader line is being edited — mirrors selectedWaypoint's shape, 'from'/'to' or a waypoint index. */
   selectedLeaderLinePoint: { leaderLineId: string; point: 'from' | 'to' | number } | null
   layers: Layer[]
-  selectedLayerId: string | null
+  selectedLayerIds: string[]
+  /** Which connection point (on the currently selected image layer or shape) is being edited — coexists with, doesn't clear, selectedLayerIds/selectedShapeIds, same as selectedWaypoint coexisting with selectedPipeIds. */
+  selectedConnectionPoint: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null
   groups: Group[]
-  /** Non-null means the four selection arrays above currently equal exactly one group's membership, selected as a unit (see selectGroup). */
+  /** Non-null means the five selection arrays above currently equal exactly one group's membership, selected as a unit (see selectGroup). */
   selectedGroupId: string | null
   /** Drives the layers list view in the (right) properties panel — toggled from a toolbar button, since there's no dedicated left-hand layers panel anymore. */
   layersPanelOpen: boolean
@@ -733,6 +769,8 @@ interface ProjectState {
   placingType: string | null
   drawingShapeKind: FreeShapeKind | null
   connectionPointTargetLayerId: string | null
+  /** Parallel to connectionPointTargetLayerId, but for the 'place-connection-point-shape' tool. */
+  connectionPointTargetShapeId: string | null
   /** Non-null while the "pick transparent color" eyedropper tool is armed for an image layer — see pickTransparentColorAt. */
   pickTransparentColorTargetLayerId: string | null
   /** Max per-channel color difference (0-255) still counted as a match — see applyTransparentColor. 0 = exact match only. A UI setting, not per-image, so it carries over between picks like the regex-search fields do. */
@@ -750,6 +788,8 @@ interface ProjectState {
   groupDragShapeOrigins: Record<string, Point[]> | null
   /** Free (non-role-anchored) leader-line points — 'from' when it's a plain point, 'to', and every waypoint — riding along with the current group drag, same shape as groupDragPipePoints. */
   groupDragLeaderLinePoints: { leaderLineId: string; point: 'from' | 'to' | number; origin: Point }[] | null
+  /** Origin x/y per selected (unlocked) image layer riding along with the current group drag — same convention as groupDragOrigins for instances. */
+  groupDragLayerOrigins: Record<string, Point> | null
   /**
    * The clipboard text (JSON-stringified ScryClipboardEnvelope) behind the
    * most recent paste, paired with the live ids it produced. Duplicate needs
@@ -767,6 +807,7 @@ interface ProjectState {
     pipeIds: string[]
     shapeIds: string[]
     leaderLineIds: string[]
+    layerIds: string[]
     groupId: string | null
   } | null
   past: HistorySnapshot[]
@@ -880,6 +921,8 @@ interface ProjectState {
   ) => void
   deleteShapes: (shapeIds: string[]) => void
   moveShape: (shapeId: string, points: Point[]) => void
+  /** Panel-driven numeric resize (unlike moveShape, pushes its own history step) — rescales every point relative to the shape's current bbox top-left corner by newWidth/oldWidth and newHeight/oldHeight, so it works uniformly for rect/ellipse (2 corners), line (2 endpoints), and polygon (any vertex count). */
+  resizeShape: (shapeId: string, width: number, height: number) => void
   setShapeStyle: (shapeId: string, style: Partial<FreeShapeStyle>) => void
   setShapeText: (shapeId: string, text: string) => void
   setShapeFontSize: (shapeId: string, fontSize: number) => void
@@ -905,7 +948,13 @@ interface ProjectState {
    * finalizeBoxSelect), instead of whichever category's own select action
    * happens to run last wiping out the others.
    */
-  selectMixed: (selection: { instanceIds: string[]; pipeIds: string[]; shapeIds: string[]; leaderLineIds: string[] }) => void
+  selectMixed: (selection: {
+    instanceIds: string[]
+    pipeIds: string[]
+    shapeIds: string[]
+    leaderLineIds: string[]
+    layerIds: string[]
+  }) => void
   /** Selects an existing group as a unit: partitions its members into the four selection arrays and sets selectedGroupId. */
   selectGroup: (groupId: string) => void
   /** Groups the current contents of the four selection arrays (2+ members required). Flattens/merges in any already-selected whole group(s) instead of nesting. Selects the new group. */
@@ -948,7 +997,7 @@ interface ProjectState {
   moveImageLayer: (layerId: string, x: number, y: number) => void
   /** Continuous drag, like moveImageLayer — checkpointed once at drag-start via onDragCheckpoint. */
   resizeImageLayer: (layerId: string, rect: { x: number; y: number; width: number; height: number }) => void
-  selectLayer: (layerId: string | null) => void
+  selectLayers: (layerIds: string[]) => void
   /** Opens the layers list view (clearing any other selection) — e.g. from the toolbar button. */
   openLayersPanel: () => void
   /** Closes the layers list view and deselects any layer whose settings were showing. */
@@ -967,6 +1016,12 @@ interface ProjectState {
   /** keepPlacing is true when Shift was held, so the tool stays active for placing several points in a row. */
   addConnectionPoint: (layerId: string, relX: number, relY: number, keepPlacing?: boolean) => void
   deleteConnectionPoint: (layerId: string, pointId: string) => void
+  /** Parallel to addConnectionPoint, but for a free shape's own connection points (relX/relY fractions of the shape's bounding box). */
+  addShapeConnectionPoint: (shapeId: string, relX: number, relY: number, keepPlacing?: boolean) => void
+  deleteShapeConnectionPoint: (shapeId: string, pointId: string) => void
+  selectConnectionPoint: (selection: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null) => void
+  /** Live update while dragging a connection-point handle — no history push per call, checkpointed via onDragCheckpoint at drag-start like every other continuous drag. */
+  moveConnectionPoint: (ownerKind: 'layer' | 'shape', ownerId: string, pointId: string, relX: number, relY: number) => void
   /** The "pick transparent color" eyedropper: samples the pixel at relX/relY (fractions of the image's footprint) and re-encodes the image with every pixel within transparentColorTolerance made transparent — one-shot, exits the tool on completion. */
   pickTransparentColorAt: (layerId: string, relX: number, relY: number) => Promise<void>
   /** Updates the tolerance; if layerId is given and that layer has a remembered pick (originalSrc + transparentColorHex), immediately re-derives src from originalSrc at the new tolerance. */
@@ -1029,8 +1084,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   leaderLines: [],
   selectedLeaderLineIds: [],
   selectedLeaderLinePoint: null,
+  selectedConnectionPoint: null,
   layers: [DEFAULT_VECTOR_LAYER],
-  selectedLayerId: null,
+  selectedLayerIds: [],
   groups: [],
   selectedGroupId: null,
   layersPanelOpen: false,
@@ -1043,6 +1099,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   placingType: null,
   drawingShapeKind: null,
   connectionPointTargetLayerId: null,
+  connectionPointTargetShapeId: null,
   pickTransparentColorTargetLayerId: null,
   transparentColorTolerance: 0,
   gridSize: BASE_GRID_SIZE / 8,
@@ -1053,6 +1110,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   groupDragPipePoints: null,
   groupDragShapeOrigins: null,
   groupDragLeaderLinePoints: null,
+  groupDragLayerOrigins: null,
   lastPasteText: null,
   lastPastedIds: null,
   past: [],
@@ -1351,12 +1409,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         pipe.waypoints.forEach((_, idx) => capturePipeRef(pipeId, idx))
       }
 
-      // Selected shapes move as a rigid translation of their whole points array.
+      // Selected shapes move as a rigid translation of their whole points
+      // array — skipping any on a locked layer, same rule as everywhere
+      // else a locked layer's shapes are immovable.
       const shapeOrigins: Record<string, Point[]> = {}
       for (const shape of state.freeShapes) {
-        if (state.selectedShapeIds.includes(shape.instanceId)) {
-          shapeOrigins[shape.instanceId] = shape.points.map((p) => ({ x: p.x, y: p.y }))
-        }
+        if (!state.selectedShapeIds.includes(shape.instanceId)) continue
+        const shapeLayer = state.layers.find((l) => l.layerId === (shape.layerId || 'default'))
+        if (shapeLayer?.locked) continue
+        shapeOrigins[shape.instanceId] = shape.points.map((p) => ({ x: p.x, y: p.y }))
       }
 
       // Selected leader lines: every waypoint, plus `from`/`to` only when
@@ -1377,12 +1438,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         })
       }
 
+      // Selected (unlocked) image layers move as a rigid x/y translation —
+      // same "immovable while locked" rule as everywhere else images are dragged.
+      const layerOrigins: Record<string, Point> = {}
+      for (const layer of state.layers) {
+        if (layer.kind === 'image' && !layer.locked && state.selectedLayerIds.includes(layer.layerId)) {
+          layerOrigins[layer.layerId] = { x: layer.x, y: layer.y }
+        }
+      }
+
       return {
         ...pushHistory(state),
         groupDragOrigins: origins,
         groupDragPipePoints: pipePointOrigins,
         groupDragShapeOrigins: Object.keys(shapeOrigins).length > 0 ? shapeOrigins : null,
         groupDragLeaderLinePoints: leaderLinePointOrigins,
+        groupDragLayerOrigins: Object.keys(layerOrigins).length > 0 ? layerOrigins : null,
       }
     }),
 
@@ -1440,10 +1511,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             })
           : state.leaderLines
 
+      const layerOrigins = state.groupDragLayerOrigins
+      const layers = layerOrigins
+        ? state.layers.map((l) => {
+            const origin = layerOrigins[l.layerId]
+            if (!origin || l.kind !== 'image') return l
+            return { ...l, x: origin.x + delta.x, y: origin.y + delta.y }
+          })
+        : state.layers
+
       return {
         pipes,
         freeShapes,
         leaderLines,
+        layers,
         instances: state.instances.map((inst) => {
           const origin = origins[inst.instanceId]
           if (!origin) return inst
@@ -1458,6 +1539,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       groupDragPipePoints: null,
       groupDragShapeOrigins: null,
       groupDragLeaderLinePoints: null,
+      groupDragLayerOrigins: null,
     }),
 
   selectInstances: (instanceIds) =>
@@ -1468,7 +1550,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedWaypoint: null,
       selectedEndpoint: null,
       selectedShapeIds: instanceIds.length > 0 ? [] : get().selectedShapeIds,
-      selectedLayerId: instanceIds.length > 0 ? null : get().selectedLayerId,
+      selectedLayerIds: instanceIds.length > 0 ? [] : get().selectedLayerIds,
       selectedLeaderLineIds: instanceIds.length > 0 ? [] : get().selectedLeaderLineIds,
       selectedLeaderLinePoint: instanceIds.length > 0 ? null : get().selectedLeaderLinePoint,
       selectedGroupId: null,
@@ -1483,9 +1565,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedWaypoint: null,
       selectedEndpoint: null,
       selectedShapeIds: state.freeShapes.map((s) => s.instanceId),
-      selectedLayerId: null,
+      selectedLayerIds: state.layers.filter((l) => l.kind === 'image' && !l.locked).map((l) => l.layerId),
       selectedLeaderLineIds: state.leaderLines.map((l) => l.instanceId),
       selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
       selectedGroupId: null,
       tagRenameError: null,
     })),
@@ -1494,6 +1577,49 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   nudgeSelection: (direction, fine) =>
     set((state) => {
+      if (state.selectedConnectionPoint) {
+        const { ownerKind, ownerId, pointId } = state.selectedConnectionPoint
+        const step = fine ? CONNECTION_POINT_NUDGE_STEP_FAST : CONNECTION_POINT_NUDGE_STEP
+        const worldDelta = { x: direction.x * step, y: direction.y * step }
+        if (ownerKind === 'layer') {
+          const layer = state.layers.find((l) => l.layerId === ownerId)
+          if (!layer || layer.kind !== 'image' || layer.width <= 0 || layer.height <= 0) return {}
+          const cp = layer.connectionPoints.find((p) => p.pointId === pointId)
+          if (!cp) return {}
+          const relX = Math.max(0, Math.min(1, cp.relX + worldDelta.x / layer.width))
+          const relY = Math.max(0, Math.min(1, cp.relY + worldDelta.y / layer.height))
+          return {
+            ...pushHistory(state),
+            layers: state.layers.map((l) =>
+              l.layerId === ownerId && l.kind === 'image'
+                ? { ...l, connectionPoints: l.connectionPoints.map((p) => (p.pointId === pointId ? { ...p, relX, relY } : p)) }
+                : l,
+            ),
+          }
+        }
+        const shape = state.freeShapes.find((s) => s.instanceId === ownerId)
+        if (!shape) return {}
+        const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+        const width = maxX - minX
+        const height = maxY - minY
+        if (width <= 0 || height <= 0) return {}
+        const cp = (shape.connectionPoints ?? []).find((p) => p.pointId === pointId)
+        if (!cp) return {}
+        const relX = Math.max(0, Math.min(1, cp.relX + worldDelta.x / width))
+        const relY = Math.max(0, Math.min(1, cp.relY + worldDelta.y / height))
+        return {
+          ...pushHistory(state),
+          freeShapes: state.freeShapes.map((s) =>
+            s.instanceId === ownerId
+              ? {
+                  ...s,
+                  connectionPoints: (s.connectionPoints ?? []).map((p) => (p.pointId === pointId ? { ...p, relX, relY } : p)),
+                }
+              : s,
+          ),
+        }
+      }
+
       if (state.selectedWaypoint) {
         const { pipeId, index } = state.selectedWaypoint
         const step = fine ? WAYPOINT_NUDGE_STEP_FAST : WAYPOINT_NUDGE_STEP
@@ -1537,9 +1663,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }
       }
 
-      if (state.selectedInstanceIds.length > 0) {
+      // Everything currently selected across all five kinds moves together
+      // by the same delta — mirrors beginGroupDrag/applyGroupDrag (the mouse
+      // group-drag path) exactly, so arrow-key nudging never leaves part of
+      // a mixed selection (e.g. pipes/images alongside instances) behind.
+      const totalSelected =
+        state.selectedInstanceIds.length +
+        state.selectedPipeIds.length +
+        state.selectedShapeIds.length +
+        state.selectedLeaderLineIds.length +
+        state.selectedLayerIds.length
+      if (totalSelected > 0) {
         const step = fine ? INSTANCE_NUDGE_STEP_FAST : INSTANCE_NUDGE_STEP
         const delta = { x: direction.x * step, y: direction.y * step }
+        const shiftFreePoint = <T extends Point>(p: T) => ({ ...p, x: p.x + delta.x, y: p.y + delta.y })
+
         return {
           ...pushHistory(state),
           instances: state.instances.map((inst) =>
@@ -1547,36 +1685,43 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               ? { ...inst, transform: { ...inst.transform, x: inst.transform.x + delta.x, y: inst.transform.y + delta.y } }
               : inst,
           ),
-        }
-      }
-
-      if (state.selectedShapeIds.length > 0) {
-        const step = fine ? SHAPE_NUDGE_STEP_FAST : SHAPE_NUDGE_STEP
-        const delta = { x: direction.x * step, y: direction.y * step }
-        return {
-          ...pushHistory(state),
-          freeShapes: state.freeShapes.map((shape) =>
-            state.selectedShapeIds.includes(shape.instanceId)
-              ? { ...shape, points: shape.points.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })) }
-              : shape,
+          pipes: state.pipes.map((pipe) =>
+            state.selectedPipeIds.includes(pipe.instanceId)
+              ? {
+                  ...pipe,
+                  fromPort: isPortRef(pipe.fromPort) ? pipe.fromPort : shiftFreePoint(pipe.fromPort),
+                  toPort: isPortRef(pipe.toPort) ? pipe.toPort : shiftFreePoint(pipe.toPort),
+                  waypoints: pipe.waypoints.map(shiftFreePoint),
+                }
+              : pipe,
           ),
-        }
-      }
-
-      if (state.selectedLayerId) {
-        const layer = state.layers.find((l) => l.layerId === state.selectedLayerId)
-        // Locked images can't be dragged on canvas either — nudge respects the same rule.
-        if (layer && layer.kind === 'image' && !layer.locked) {
-          const step = fine ? SHAPE_NUDGE_STEP_FAST : SHAPE_NUDGE_STEP
-          const delta = { x: direction.x * step, y: direction.y * step }
-          return {
-            ...pushHistory(state),
-            layers: state.layers.map((l) =>
-              l.layerId === state.selectedLayerId && l.kind === 'image'
-                ? { ...l, x: l.x + delta.x, y: l.y + delta.y }
-                : l,
-            ),
-          }
+          freeShapes: state.freeShapes.map((shape) => {
+            if (!state.selectedShapeIds.includes(shape.instanceId)) return shape
+            const shapeLayer = state.layers.find((l) => l.layerId === (shape.layerId || 'default'))
+            if (shapeLayer?.locked) return shape
+            return { ...shape, points: shape.points.map(shiftFreePoint) }
+          }),
+          leaderLines: state.leaderLines.map((line) =>
+            state.selectedLeaderLineIds.includes(line.instanceId)
+              ? {
+                  ...line,
+                  from:
+                    isLeaderLineEndpointRef(line.from) || isLeaderLineBorderRef(line.from)
+                      ? line.from
+                      : shiftFreePoint(line.from),
+                  to:
+                    isLeaderLineEndpointRef(line.to) || isLeaderLineBorderRef(line.to)
+                      ? line.to
+                      : shiftFreePoint(line.to),
+                  waypoints: line.waypoints.map(shiftFreePoint),
+                }
+              : line,
+          ),
+          layers: state.layers.map((l) =>
+            l.kind === 'image' && !l.locked && state.selectedLayerIds.includes(l.layerId)
+              ? { ...l, x: l.x + delta.x, y: l.y + delta.y }
+              : l,
+          ),
         }
       }
 
@@ -1589,16 +1734,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       placingType: tool === 'place' ? componentTypeId : null,
       drawingShapeKind: tool === 'draw-shape' ? (componentTypeId as FreeShapeKind | null) : null,
       connectionPointTargetLayerId: tool === 'place-connection-point' ? componentTypeId : null,
+      connectionPointTargetShapeId: tool === 'place-connection-point-shape' ? componentTypeId : null,
       pickTransparentColorTargetLayerId: tool === 'pick-transparent-color' ? componentTypeId : null,
-      // Switching tools deselects a selected image layer — except arming
+      // Switching tools deselects any selected image layers — except arming
       // the connection-point/transparent-color-pick tool from that same
-      // layer's own panel button, which isn't "another tool" from the
-      // user's perspective, just a mode of editing the selected layer.
-      selectedLayerId:
+      // (single) selected layer's own panel button, which isn't "another
+      // tool" from the user's perspective, just a mode of editing it.
+      selectedLayerIds:
         (tool === 'place-connection-point' || tool === 'pick-transparent-color') &&
-        componentTypeId === state.selectedLayerId
-          ? state.selectedLayerId
-          : null,
+        state.selectedLayerIds.length === 1 &&
+        componentTypeId === state.selectedLayerIds[0]
+          ? state.selectedLayerIds
+          : [],
     })),
 
   cancelTool: () =>
@@ -1607,6 +1754,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       placingType: null,
       drawingShapeKind: null,
       connectionPointTargetLayerId: null,
+      connectionPointTargetShapeId: null,
       pickTransparentColorTargetLayerId: null,
     }),
 
@@ -1640,7 +1788,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedPipeIds: [],
         selectedWaypoint: null,
         selectedShapeIds: [],
-        selectedLayerId: null,
+        selectedLayerIds: [],
         selectedLeaderLineIds: [],
         selectedGroupId: null,
         tagRenameError: null,
@@ -1665,7 +1813,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedPipeIds: [],
         selectedWaypoint: null,
         selectedShapeIds: [],
-        selectedLayerId: null,
+        selectedLayerIds: [],
         selectedLeaderLineIds: [],
         selectedGroupId: null,
         tagRenameError: null,
@@ -1714,7 +1862,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         // its last position first, same "leave a knot" contract as deleting
         // a component a pipe was attached to.
         pipes: recomputeVolumeTags(
-          detachPipesFromPipes(state.pipes, state.instances, state.layers, removed).filter(
+          detachPipesFromPipes(state.pipes, state.instances, state.layers, removed, state.freeShapes).filter(
             (p) => !pipeIds.includes(p.instanceId),
           ),
         ),
@@ -1840,7 +1988,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const pipe = state.pipes.find((p) => p.instanceId === pipeId)
       if (!pipe) return {}
       const insertedPointIndex = index + 1 // waypoint-array index -> full-point-list index (fromPos is always point 0)
-      const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers)
+      const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers, state.freeShapes)
       const pipes = shiftPipePointRefsForInsert(state.pipes, pipeId, insertedPointIndex).map((p) =>
         p.instanceId === pipeId
           ? {
@@ -1860,7 +2008,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           : p,
       )
       const newPipe = pipes.find((p) => p.instanceId === pipeId)!
-      const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers)
+      const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers, state.freeShapes)
       const leaderLines =
         oldPoints && newPoints
           ? shiftLeaderLinePipeAnchorsForPipeChange(state.leaderLines, pipeId, oldPoints, newPoints)
@@ -1873,7 +2021,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedInstanceIds: [],
         selectedRole: null,
         selectedShapeIds: [],
-        selectedLayerId: null,
+        selectedLayerIds: [],
         selectedWaypoint: { pipeId, index },
         selectedEndpoint: null,
         tagRenameError: null,
@@ -1886,7 +2034,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const pipe = state.pipes.find((p) => p.instanceId === pipeId)
       if (!pipe) return {}
       const removedPointIndex = index + 1
-      const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers)
+      const oldPoints = getPipePoints(pipe, state.instances, state.pipes, state.layers, state.freeShapes)
       const pipes = shiftPipePointRefsForDelete(state.pipes, state.instances, state.layers, pipeId, removedPointIndex).map(
         (p) =>
           p.instanceId === pipeId
@@ -1903,7 +2051,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             : p,
       )
       const newPipe = pipes.find((p) => p.instanceId === pipeId)!
-      const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers)
+      const newPoints = getPipePoints(newPipe, state.instances, pipes, state.layers, state.freeShapes)
       const leaderLines =
         oldPoints && newPoints
           ? shiftLeaderLinePipeAnchorsForPipeChange(state.leaderLines, pipeId, oldPoints, newPoints)
@@ -1958,7 +2106,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (isPortRef(pipe.fromPort)) ignoreInstanceIds.add(pipe.fromPort.instanceId)
       if (isPortRef(pipe.toPort)) ignoreInstanceIds.add(pipe.toPort.instanceId)
 
-      const waypoints = computeAutoRoute(pipe, state.instances, state.pipes, state.layers, {
+      const waypoints = computeAutoRoute(pipe, state.instances, state.pipes, state.layers, state.freeShapes, {
         cellSize: state.gridSize,
         ignoreInstanceIds,
       })
@@ -1980,7 +2128,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedWaypoint: null,
       selectedEndpoint: null,
       selectedShapeIds: pipeIds.length > 0 ? [] : get().selectedShapeIds,
-      selectedLayerId: pipeIds.length > 0 ? null : get().selectedLayerId,
+      selectedLayerIds: pipeIds.length > 0 ? [] : get().selectedLayerIds,
       selectedLeaderLineIds: pipeIds.length > 0 ? [] : get().selectedLeaderLineIds,
       selectedLeaderLinePoint: pipeIds.length > 0 ? null : get().selectedLeaderLinePoint,
       selectedGroupId: null,
@@ -2034,7 +2182,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return {
         ...pushHistory(state),
         freeShapes: state.freeShapes.filter((s) => !shapeIds.includes(s.instanceId)),
-        // Same "leave a knot instead of dangling" contract as deletePipes above.
+        // Same "leave a knot instead of dangling" contract as deletePipes above — now also for any pipe attached to one of these shapes' connection points.
+        pipes: recomputeVolumeTags(
+          detachPipesFromConnectionPointOwners(
+            state.pipes,
+            state.instances,
+            state.layers,
+            state.freeShapes,
+            new Set(),
+            removed,
+          ),
+        ),
         leaderLines: detachLeaderLineEndpoints(state.leaderLines, state.instances, state.pipes, state.freeShapes, state.layers, {
           shapeIds: removed,
         }),
@@ -2048,6 +2206,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       freeShapes: state.freeShapes.map((s) => (s.instanceId === shapeId ? { ...s, points } : s)),
     })),
+
+  resizeShape: (shapeId, width, height) =>
+    set((state) => {
+      const shape = state.freeShapes.find((s) => s.instanceId === shapeId)
+      if (!shape) return {}
+      const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+      const oldWidth = maxX - minX
+      const oldHeight = maxY - minY
+      if (oldWidth <= 0 || oldHeight <= 0) return {}
+      const scaleX = Math.max(1, width) / oldWidth
+      const scaleY = Math.max(1, height) / oldHeight
+      return {
+        ...pushHistory(state),
+        freeShapes: state.freeShapes.map((s) =>
+          s.instanceId === shapeId
+            ? { ...s, points: s.points.map((p) => ({ x: minX + (p.x - minX) * scaleX, y: minY + (p.y - minY) * scaleY })) }
+            : s,
+        ),
+      }
+    }),
 
   setShapeStyle: (shapeId, style) =>
     set((state) => ({
@@ -2083,7 +2261,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedRole: null,
       selectedWaypoint: null,
       selectedEndpoint: null,
-      selectedLayerId: shapeIds.length > 0 ? null : get().selectedLayerId,
+      selectedLayerIds: shapeIds.length > 0 ? [] : get().selectedLayerIds,
       selectedLeaderLineIds: shapeIds.length > 0 ? [] : get().selectedLeaderLineIds,
       selectedGroupId: null,
       tagRenameError: null,
@@ -2107,6 +2285,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedRole: null,
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
         tagRenameError: null,
         tool: 'select',
       }
@@ -2157,8 +2336,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedRole: null,
       selectedWaypoint: null,
       selectedEndpoint: null,
-      selectedLayerId: leaderLineIds.length > 0 ? null : get().selectedLayerId,
+      selectedLayerIds: leaderLineIds.length > 0 ? [] : get().selectedLayerIds,
       selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
       selectedGroupId: null,
       tagRenameError: null,
     }),
@@ -2171,11 +2351,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedPipeIds: selection.pipeIds,
       selectedShapeIds: selection.shapeIds,
       selectedLeaderLineIds: selection.leaderLineIds,
+      selectedLayerIds: selection.layerIds,
       selectedRole: null,
       selectedWaypoint: null,
       selectedEndpoint: null,
       selectedLeaderLinePoint: null,
-      selectedLayerId: null,
+        selectedConnectionPoint: null,
       selectedGroupId: null,
       tagRenameError: null,
     }),
@@ -2190,11 +2371,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedPipeIds: byKind('pipe'),
         selectedShapeIds: byKind('shape'),
         selectedLeaderLineIds: byKind('leaderLine'),
+        selectedLayerIds: byKind('layer'),
         selectedGroupId: groupId,
         selectedRole: null,
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
-        selectedLayerId: null,
+        selectedConnectionPoint: null,
         tagRenameError: null,
       }
     }),
@@ -2205,7 +2387,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         state.selectedInstanceIds.length +
         state.selectedPipeIds.length +
         state.selectedShapeIds.length +
-        state.selectedLeaderLineIds.length
+        state.selectedLeaderLineIds.length +
+        state.selectedLayerIds.length
       if (total < 2) return {}
 
       const selectedIds: Record<GroupMemberRef['kind'], Set<string>> = {
@@ -2213,6 +2396,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         pipe: new Set(state.selectedPipeIds),
         shape: new Set(state.selectedShapeIds),
         leaderLine: new Set(state.selectedLeaderLineIds),
+        layer: new Set(state.selectedLayerIds),
       }
       // No real nested groups in v1: grouping a selection that already
       // covers an existing whole group merges/flattens that group into the
@@ -2227,6 +2411,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...state.selectedPipeIds.map((id) => ({ kind: 'pipe' as const, id })),
         ...state.selectedShapeIds.map((id) => ({ kind: 'shape' as const, id })),
         ...state.selectedLeaderLineIds.map((id) => ({ kind: 'leaderLine' as const, id })),
+        ...state.selectedLayerIds.map((id) => ({ kind: 'layer' as const, id })),
       ]
       const group: Group = { groupId: crypto.randomUUID(), members }
       return {
@@ -2253,6 +2438,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const pipeIds = new Set(group.members.filter((m) => m.kind === 'pipe').map((m) => m.id))
       const shapeIds = new Set(group.members.filter((m) => m.kind === 'shape').map((m) => m.id))
       const leaderLineIds = new Set(group.members.filter((m) => m.kind === 'leaderLine').map((m) => m.id))
+      const layerIds = new Set(group.members.filter((m) => m.kind === 'layer').map((m) => m.id))
       // Inlined via computeMixedDeletion rather than calling deleteInstances/
       // deletePipes/etc. — each of those pushes its own history entry, which
       // would turn one "delete group" into several undo steps instead of the
@@ -2261,15 +2447,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       // stripDeletedGroupMembers already drops any group under 2 members.
       return {
         ...pushHistory(state),
-        ...computeMixedDeletion(state, { instanceIds, pipeIds, shapeIds, leaderLineIds }),
+        ...computeMixedDeletion(state, { instanceIds, pipeIds, shapeIds, leaderLineIds, layerIds }),
         selectedGroupId: null,
         selectedInstanceIds: [],
         selectedPipeIds: [],
         selectedShapeIds: [],
         selectedLeaderLineIds: [],
+        selectedLayerIds: [],
         selectedRole: null,
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
         tagRenameError: null,
       }
     }),
@@ -2336,7 +2524,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const pipeIds = new Set(state.selectedPipeIds)
       const shapeIds = new Set(state.selectedShapeIds)
       const leaderLineIds = new Set(state.selectedLeaderLineIds)
-      const deletion = computeMixedDeletion(state, { instanceIds, pipeIds, shapeIds, leaderLineIds })
+      const layerIds = new Set(state.selectedLayerIds)
+      const deletion = computeMixedDeletion(state, { instanceIds, pipeIds, shapeIds, leaderLineIds, layerIds })
       return {
         ...pushHistory(state),
         ...deletion,
@@ -2345,9 +2534,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedPipeIds: [],
         selectedShapeIds: [],
         selectedLeaderLineIds: [],
+        selectedLayerIds: [],
         selectedRole: null,
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
         tagRenameError: null,
       }
     }),
@@ -2355,7 +2546,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   duplicateSelection: () =>
     set((state) => {
       const source = gatherSelectionAsEntitySet(state)
-      const total = source.instances.length + source.pipes.length + source.freeShapes.length + source.leaderLines.length
+      const total =
+        source.instances.length + source.pipes.length + source.freeShapes.length + source.leaderLines.length + source.layers.length
       if (total === 0) return {}
       const clone = cloneEntitySet(source, { x: state.gridSize, y: state.gridSize })
       return {
@@ -2364,6 +2556,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         pipes: recomputeVolumeTags([...state.pipes, ...clone.pipes]),
         freeShapes: [...state.freeShapes, ...clone.freeShapes],
         leaderLines: [...state.leaderLines, ...clone.leaderLines],
+        layers: [...state.layers, ...clone.layers],
         groups: [...state.groups, ...clone.groups],
         // Re-select the clone (same convention selectMixed/selectGroup use)
         // — this is what makes repeated Ctrl+D stack: the next call's
@@ -2373,10 +2566,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedPipeIds: clone.pipes.map((p) => p.instanceId),
         selectedShapeIds: clone.freeShapes.map((s) => s.instanceId),
         selectedLeaderLineIds: clone.leaderLines.map((l) => l.instanceId),
+        selectedLayerIds: clone.layers.map((l) => l.layerId),
         selectedGroupId: clone.groups[0]?.groupId ?? null,
         selectedRole: null,
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
         tagRenameError: null,
       }
     }),
@@ -2384,7 +2579,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   copySelectionToClipboard: () => {
     const state = get()
     const payload = gatherSelectionAsEntitySet(state)
-    const total = payload.instances.length + payload.pipes.length + payload.freeShapes.length + payload.leaderLines.length
+    const total =
+      payload.instances.length + payload.pipes.length + payload.freeShapes.length + payload.leaderLines.length + payload.layers.length
     // No-op on an empty selection so Ctrl+C with nothing selected doesn't
     // clobber whatever the user already had on their OS clipboard.
     if (total === 0) return
@@ -2421,15 +2617,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           pipes: state.pipes.filter((p) => prev.pipeIds.includes(p.instanceId)),
           freeShapes: state.freeShapes.filter((s) => prev.shapeIds.includes(s.instanceId)),
           leaderLines: state.leaderLines.filter((l) => prev.leaderLineIds.includes(l.instanceId)),
+          layers: state.layers.filter((l): l is ImageLayer => l.kind === 'image' && prev.layerIds.includes(l.layerId)),
           groups: state.groups.filter((g) => g.groupId === prev.groupId),
         }
         const matchedTotal =
-          matched.instances.length + matched.pipes.length + matched.freeShapes.length + matched.leaderLines.length
+          matched.instances.length +
+          matched.pipes.length +
+          matched.freeShapes.length +
+          matched.leaderLines.length +
+          matched.layers.length
         if (matchedTotal > 0) source = matched
       }
       if (!source) source = parsed.payload
 
-      const total = source.instances.length + source.pipes.length + source.freeShapes.length + source.leaderLines.length
+      const total =
+        source.instances.length + source.pipes.length + source.freeShapes.length + source.leaderLines.length + source.layers.length
       if (total === 0) return {}
 
       const clone = cloneEntitySet(source, { x: state.gridSize, y: state.gridSize })
@@ -2438,6 +2640,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         pipeIds: clone.pipes.map((p) => p.instanceId),
         shapeIds: clone.freeShapes.map((s) => s.instanceId),
         leaderLineIds: clone.leaderLines.map((l) => l.instanceId),
+        layerIds: clone.layers.map((l) => l.layerId),
         groupId: clone.groups[0]?.groupId ?? null,
       }
       return {
@@ -2446,15 +2649,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         pipes: recomputeVolumeTags([...state.pipes, ...clone.pipes]),
         freeShapes: [...state.freeShapes, ...clone.freeShapes],
         leaderLines: [...state.leaderLines, ...clone.leaderLines],
+        layers: [...state.layers, ...clone.layers],
         groups: [...state.groups, ...clone.groups],
         selectedInstanceIds: lastPastedIds.instanceIds,
         selectedPipeIds: lastPastedIds.pipeIds,
         selectedShapeIds: lastPastedIds.shapeIds,
         selectedLeaderLineIds: lastPastedIds.leaderLineIds,
+        selectedLayerIds: lastPastedIds.layerIds,
         selectedGroupId: lastPastedIds.groupId,
         selectedRole: null,
         selectedWaypoint: null,
         selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
         tagRenameError: null,
         lastPasteText: text,
         lastPastedIds,
@@ -2512,11 +2718,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // is nothing for a Group to end up dangling on, unlike the delete* actions
   // above.
   deleteLayer: (layerId) =>
-    set((state) => ({
-      ...pushHistory(state),
-      layers: state.layers.filter((l) => l.layerId !== layerId),
-      selectedLayerId: state.selectedLayerId === layerId ? null : state.selectedLayerId,
-    })),
+    set((state) => {
+      const groups = stripDeletedGroupMembers(state.groups, { layer: new Set([layerId]) })
+      const removedLayerIds = new Set([layerId])
+      return {
+        ...pushHistory(state),
+        layers: state.layers.filter((l) => l.layerId !== layerId),
+        // Same "leave a knot instead of dangling" contract as deleteShapes/deleteInstances — any pipe attached to this layer's connection points survives, frozen at its last position.
+        pipes: recomputeVolumeTags(
+          detachPipesFromConnectionPointOwners(
+            state.pipes,
+            state.instances,
+            state.layers,
+            state.freeShapes,
+            removedLayerIds,
+            new Set(),
+          ),
+        ),
+        selectedLayerIds: state.selectedLayerIds.filter((id) => id !== layerId),
+        groups,
+        selectedGroupId: clearSelectedGroupIfGone(groups, state.selectedGroupId),
+      }
+    }),
 
   renameLayer: (layerId, name) =>
     set((state) => ({
@@ -2585,15 +2808,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       layers: state.layers.map((l) => (l.layerId === layerId && l.kind === 'image' ? { ...l, ...rect } : l)),
     })),
 
-  selectLayer: (layerId) =>
+  selectLayers: (layerIds) =>
     set({
-      selectedLayerId: layerId,
-      selectedInstanceIds: layerId ? [] : get().selectedInstanceIds,
-      selectedPipeIds: layerId ? [] : get().selectedPipeIds,
-      selectedShapeIds: layerId ? [] : get().selectedShapeIds,
-      selectedLeaderLineIds: layerId ? [] : get().selectedLeaderLineIds,
-      selectedLeaderLinePoint: layerId ? null : get().selectedLeaderLinePoint,
-      selectedGroupId: layerId ? null : get().selectedGroupId,
+      selectedLayerIds: layerIds,
+      selectedInstanceIds: layerIds.length > 0 ? [] : get().selectedInstanceIds,
+      selectedPipeIds: layerIds.length > 0 ? [] : get().selectedPipeIds,
+      selectedShapeIds: layerIds.length > 0 ? [] : get().selectedShapeIds,
+      selectedLeaderLineIds: layerIds.length > 0 ? [] : get().selectedLeaderLineIds,
+      selectedLeaderLinePoint: layerIds.length > 0 ? null : get().selectedLeaderLinePoint,
+      selectedGroupId: layerIds.length > 0 ? null : get().selectedGroupId,
       selectedRole: null,
       selectedWaypoint: null,
       tagRenameError: null,
@@ -2602,35 +2825,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   openLayersPanel: () =>
     set({
       layersPanelOpen: true,
-      selectedLayerId: null,
+      selectedLayerIds: [],
       selectedInstanceIds: [],
       selectedPipeIds: [],
       selectedShapeIds: [],
       selectedLeaderLineIds: [],
       selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
       selectedGroupId: null,
       selectedRole: null,
       selectedWaypoint: null,
       tagRenameError: null,
     }),
 
-  closeLayersPanel: () => set({ layersPanelOpen: false, selectedLayerId: null }),
+  closeLayersPanel: () => set({ layersPanelOpen: false, selectedLayerIds: [] }),
 
   toggleLayersPanel: () => {
     const state = get()
-    if (state.layersPanelOpen || state.selectedLayerId) get().closeLayersPanel()
+    if (state.layersPanelOpen || state.selectedLayerIds.length > 0) get().closeLayersPanel()
     else get().openLayersPanel()
   },
 
   openSearchPanel: () =>
     set({
       searchPanelOpen: true,
-      selectedLayerId: null,
+      selectedLayerIds: [],
       selectedInstanceIds: [],
       selectedPipeIds: [],
       selectedShapeIds: [],
       selectedLeaderLineIds: [],
       selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
       selectedGroupId: null,
       selectedRole: null,
       selectedWaypoint: null,
@@ -2689,6 +2914,63 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ),
     })),
 
+  addShapeConnectionPoint: (shapeId, relX, relY, keepPlacing = false) =>
+    set((state) => {
+      const point: ImageConnectionPoint = { pointId: crypto.randomUUID(), relX, relY }
+      return {
+        ...pushHistory(state),
+        freeShapes: state.freeShapes.map((s) =>
+          s.instanceId === shapeId ? { ...s, connectionPoints: [...(s.connectionPoints ?? []), point] } : s,
+        ),
+        tool: keepPlacing ? state.tool : 'select',
+        connectionPointTargetShapeId: keepPlacing ? state.connectionPointTargetShapeId : null,
+      }
+    }),
+
+  deleteShapeConnectionPoint: (shapeId, pointId) =>
+    set((state) => ({
+      ...pushHistory(state),
+      freeShapes: state.freeShapes.map((s) =>
+        s.instanceId === shapeId
+          ? { ...s, connectionPoints: (s.connectionPoints ?? []).filter((p) => p.pointId !== pointId) }
+          : s,
+      ),
+    })),
+
+  selectConnectionPoint: (selection) => set({ selectedConnectionPoint: selection }),
+
+  moveConnectionPoint: (ownerKind, ownerId, pointId, relX, relY) =>
+    set((state) => {
+      const clampedX = Math.max(0, Math.min(1, relX))
+      const clampedY = Math.max(0, Math.min(1, relY))
+      if (ownerKind === 'layer') {
+        return {
+          layers: state.layers.map((l) =>
+            l.layerId === ownerId && l.kind === 'image'
+              ? {
+                  ...l,
+                  connectionPoints: l.connectionPoints.map((p) =>
+                    p.pointId === pointId ? { ...p, relX: clampedX, relY: clampedY } : p,
+                  ),
+                }
+              : l,
+          ),
+        }
+      }
+      return {
+        freeShapes: state.freeShapes.map((s) =>
+          s.instanceId === ownerId
+            ? {
+                ...s,
+                connectionPoints: (s.connectionPoints ?? []).map((p) =>
+                  p.pointId === pointId ? { ...p, relX: clampedX, relY: clampedY } : p,
+                ),
+              }
+            : s,
+        ),
+      }
+    }),
+
   pickTransparentColorAt: async (layerId, relX, relY) => {
     // Exits the eyedropper tool immediately (one-shot, like PowerPoint's
     // own "Set Transparent Color") rather than waiting for the async
@@ -2697,7 +2979,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       tool: 'select',
       pickTransparentColorTargetLayerId: null,
-      selectedLayerId: state.selectedLayerId ?? layerId,
+      selectedLayerIds: state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [layerId],
     }))
     const layer = get().layers.find((l) => l.layerId === layerId)
     if (!layer || layer.kind !== 'image') return
@@ -2881,6 +3163,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedShapeIds: [],
         selectedLeaderLineIds: [],
         selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
         selectedGroupId: null,
         tagRenameError: null,
         // Undo history from whatever project was open before doesn't apply
@@ -3003,6 +3286,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedShapeIds: [],
       selectedLeaderLineIds: [],
       selectedLeaderLinePoint: null,
+        selectedConnectionPoint: null,
       selectedGroupId: null,
       tagRenameError: null,
       past: [],

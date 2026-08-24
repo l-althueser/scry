@@ -151,7 +151,7 @@ export default function App() {
   const duplicateSelection = useProjectStore((s) => s.duplicateSelection)
   const copySelectionToClipboard = useProjectStore((s) => s.copySelectionToClipboard)
   const pasteFromClipboardText = useProjectStore((s) => s.pasteFromClipboardText)
-  const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
+  const selectedLayerIds = useProjectStore((s) => s.selectedLayerIds)
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const toggleLayersPanel = useProjectStore((s) => s.toggleLayersPanel)
   const addImageLayer = useProjectStore((s) => s.addImageLayer)
@@ -159,7 +159,11 @@ export default function App() {
   const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
   const toggleSearchPanel = useProjectStore((s) => s.toggleSearchPanel)
   const closeSearchPanel = useProjectStore((s) => s.closeSearchPanel)
-  const deleteLayer = useProjectStore((s) => s.deleteLayer)
+  const deleteSelection = useProjectStore((s) => s.deleteSelection)
+  const selectedConnectionPoint = useProjectStore((s) => s.selectedConnectionPoint)
+  const selectConnectionPoint = useProjectStore((s) => s.selectConnectionPoint)
+  const deleteConnectionPoint = useProjectStore((s) => s.deleteConnectionPoint)
+  const deleteShapeConnectionPoint = useProjectStore((s) => s.deleteShapeConnectionPoint)
   const selectInstances = useProjectStore((s) => s.selectInstances)
   const selectRole = useProjectStore((s) => s.selectRole)
   const selectPipes = useProjectStore((s) => s.selectPipes)
@@ -197,9 +201,14 @@ export default function App() {
     pipes: selectedPipeIds.length,
     shapes: selectedShapeIds.length,
     leaderLines: selectedLeaderLineIds.length,
+    images: selectedLayerIds.length,
   }
   const selectionTotal =
-    selectionCounts.instances + selectionCounts.pipes + selectionCounts.shapes + selectionCounts.leaderLines
+    selectionCounts.instances +
+    selectionCounts.pipes +
+    selectionCounts.shapes +
+    selectionCounts.leaderLines +
+    selectionCounts.images
 
   const [libraryEditorOpen, setLibraryEditorOpen] = useState(false)
   const [projectsModalOpen, setProjectsModalOpen] = useState(false)
@@ -340,6 +349,8 @@ export default function App() {
         canvasViewRef.current?.clearEnteredGroup()
         if (tool !== 'select') {
           cancelTool()
+        } else if (selectedConnectionPoint) {
+          selectConnectionPoint(null)
         } else if (selectedWaypoint) {
           selectWaypoint(null)
         } else if (selectedRole) {
@@ -352,7 +363,7 @@ export default function App() {
           selectLeaderLines([])
         } else if (selectedInstanceIds.length > 0) {
           selectInstances([])
-        } else if (selectedLayerId || layersPanelOpen) {
+        } else if (selectedLayerIds.length > 0 || layersPanelOpen) {
           closeLayersPanel()
         } else if (searchPanelOpen) {
           closeSearchPanel()
@@ -363,11 +374,14 @@ export default function App() {
       const direction = ARROW_DIRECTIONS[evt.key]
       if (
         direction &&
-        (selectedWaypoint ||
+        (selectedConnectionPoint ||
+          selectedWaypoint ||
           selectedRole ||
           selectedInstanceIds.length > 0 ||
+          selectedPipeIds.length > 0 ||
           selectedShapeIds.length > 0 ||
-          selectedLayerId)
+          selectedLeaderLineIds.length > 0 ||
+          selectedLayerIds.length > 0)
       ) {
         evt.preventDefault()
         nudgeSelection(direction, evt.shiftKey)
@@ -375,7 +389,14 @@ export default function App() {
       }
 
       if (evt.key === 'Delete' || evt.key === 'Backspace') {
-        if (selectedWaypoint) {
+        if (selectedConnectionPoint) {
+          evt.preventDefault()
+          if (selectedConnectionPoint.ownerKind === 'layer') {
+            deleteConnectionPoint(selectedConnectionPoint.ownerId, selectedConnectionPoint.pointId)
+          } else {
+            deleteShapeConnectionPoint(selectedConnectionPoint.ownerId, selectedConnectionPoint.pointId)
+          }
+        } else if (selectedWaypoint) {
           evt.preventDefault()
           deletePipeWaypoint(selectedWaypoint.pipeId, selectedWaypoint.index)
         } else if (selectedPipeIds.length > 0) {
@@ -390,9 +411,9 @@ export default function App() {
         } else if (selectedInstanceIds.length > 0) {
           evt.preventDefault()
           deleteInstances(selectedInstanceIds)
-        } else if (selectedLayerId) {
+        } else if (selectedLayerIds.length > 0) {
           evt.preventDefault()
-          deleteLayer(selectedLayerId)
+          deleteSelection()
         }
         return
       }
@@ -413,7 +434,8 @@ export default function App() {
     selectedShapeIds,
     selectedLeaderLineIds,
     selectedGroupId,
-    selectedLayerId,
+    selectedLayerIds,
+    selectedConnectionPoint,
     layersPanelOpen,
     searchPanelOpen,
     closeSearchPanel,
@@ -430,7 +452,10 @@ export default function App() {
     deletePipeWaypoint,
     deleteShapes,
     deleteLeaderLines,
-    deleteLayer,
+    deleteSelection,
+    selectConnectionPoint,
+    deleteConnectionPoint,
+    deleteShapeConnectionPoint,
     closeLayersPanel,
     rotateInstance,
     nudgeSelection,
@@ -565,7 +590,9 @@ export default function App() {
           </button>
           <span className="toolbar-divider" aria-hidden="true" />
           <button
-            className={layersPanelOpen || selectedLayerId ? 'tool-button icon-button active' : 'tool-button icon-button'}
+            className={
+              layersPanelOpen || selectedLayerIds.length > 0 ? 'tool-button icon-button active' : 'tool-button icon-button'
+            }
             onClick={() => toggleLayersPanel()}
             title="Layers: reorder image and shape layers against each other (e.g. put a colored shape behind a transparent image), toggle visibility, and edit an image's settings. Opens in the properties panel."
           >

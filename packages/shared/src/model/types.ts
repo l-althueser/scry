@@ -247,6 +247,8 @@ export interface FreeShape {
   /** Only meaningful for kind: 'text'. Undefined = 'left' (the original, only-ever behavior — kept optional so existing saved projects still load with their prior appearance). */
   textAlign?: TextAlign
   style: FreeShapeStyle
+  /** Pipes can connect to these — relX/relY fractions of the shape's own bounding box, same convention as ImageConnectionPoint (reused as-is despite the name; it's generic). Optional/defaults to [] so existing saved projects without any still load. */
+  connectionPoints?: ImageConnectionPoint[]
 }
 
 interface LayerBase {
@@ -312,7 +314,7 @@ export interface LibraryRef {
   version: string
 }
 
-export type GroupMemberKind = 'instance' | 'pipe' | 'shape' | 'leaderLine'
+export type GroupMemberKind = 'instance' | 'pipe' | 'shape' | 'leaderLine' | 'layer'
 
 export interface GroupMemberRef {
   kind: GroupMemberKind
@@ -321,12 +323,12 @@ export interface GroupMemberRef {
 
 /**
  * A user-created, persisted grouping of elements across kinds (instances,
- * pipes, shapes, leader lines). Editor-only concept — has no bearing on the
- * exported live SVG's Node-RED tag contract. Deliberately flat: a member's
- * kind is always one of the four leaves above, never 'group' itself, so
- * nothing that consumes Group.members needs to recurse. Grouping a
- * selection that includes an existing whole group flattens/merges it into
- * the new group instead of nesting.
+ * pipes, shapes, leader lines, image layers). Editor-only concept — has no
+ * bearing on the exported live SVG's Node-RED tag contract. Deliberately
+ * flat: a member's kind is always one of the five leaves above, never
+ * 'group' itself, so nothing that consumes Group.members needs to recurse.
+ * Grouping a selection that includes an existing whole group flattens/merges
+ * it into the new group instead of nesting.
  */
 export interface Group {
   groupId: string
@@ -358,6 +360,8 @@ export interface ScryClipboardPayload {
   pipes: PipeInstance[]
   freeShapes: FreeShape[]
   leaderLines: LeaderLine[]
+  /** Image layers only — vector/shape layers are containers, not selected "content" the same way. */
+  layers: ImageLayer[]
   /** 0 or 1 in practice — the selected group, if any. */
   groups: Group[]
 }
@@ -380,6 +384,7 @@ export function isScryClipboardEnvelope(x: unknown): x is ScryClipboardEnvelope 
     Array.isArray(payload.pipes) &&
     Array.isArray(payload.freeShapes) &&
     Array.isArray(payload.leaderLines) &&
+    Array.isArray(payload.layers) &&
     Array.isArray(payload.groups)
   )
 }

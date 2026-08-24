@@ -71,7 +71,7 @@ export function exportProjectToSvg(
   const pointsByPipe = new Map<string, Point[]>()
   const displayPointsByPipe = new Map<string, Point[]>()
   for (const pipe of pipes) {
-    const pts = getPipePoints(pipe, instances, pipes, layers)
+    const pts = getPipePoints(pipe, instances, pipes, layers, freeShapes)
     if (pts) {
       pointsByPipe.set(pipe.instanceId, pts)
       displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
@@ -181,7 +181,7 @@ function computeBounds(
   }
 
   for (const pipe of pipes) {
-    const points = getPipePoints(pipe, instances, pipes, layers)
+    const points = getPipePoints(pipe, instances, pipes, layers, freeShapes)
     if (!points) continue
     for (const p of points) {
       minX = Math.min(minX, p.x)
