@@ -286,6 +286,8 @@ export interface ImageLayer extends LayerBase {
   width: number
   height: number
   connectionPoints: ImageConnectionPoint[]
+  /** Grid lines are hidden under this image's footprint by default (so the image reads cleanly); set true to show the grid over it anyway. Undefined behaves as false — older saved projects keep the same (hidden) look they always had. */
+  showGridOverImage?: boolean
 }
 
 export type Layer = VectorLayer | ImageLayer

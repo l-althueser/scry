@@ -178,6 +178,9 @@ export interface SvgCanvasCallbacks {
   onLeaderLineFromMoved: (leaderLineId: string, from: LeaderLineEndpoint) => void
 }
 
+/** Ensures each SvgCanvas instance's <mask id> is unique in the document (see gridMaskId in the constructor) — matters if the app ever mounts more than one canvas at once. */
+let nextCanvasInstanceId = 0
+
 const MIN_SCALE = 0.2
 const MAX_SCALE = 8
 // High enough that the grid still renders at the default zoom with the
@@ -229,6 +232,9 @@ export class SvgCanvas {
 
   private viewBox: ViewBox = { x: 0, y: 0, w: 1000, h: 700 }
   private gridSize: number
+  /** Unique per instance — see nextCanvasInstanceId. */
+  private readonly gridMaskId = `gv-grid-mask-${nextCanvasInstanceId++}`
+  private gridMaskEl!: SVGMaskElement
   /** Keeps the viewBox's aspect ratio matching the container's actual (resizable) aspect ratio — see syncViewBoxAspect. Without this, a container whose aspect ratio doesn't match the viewBox's fixed 1000:700 gets letterboxed by the SVG's default preserveAspectRatio, and the grid (which only fills the viewBox rectangle) visibly stops short of the letterboxed edges. */
   private readonly resizeObserver: ResizeObserver
   private instanceEls = new Map<string, SVGGElement>()
@@ -365,6 +371,20 @@ export class SvgCanvas {
 
     this.backgroundLayer = this.createLayer('background-layer')
     this.gridLayer = this.createLayer('grid-layer')
+
+    // Punches out the grid under each image layer's footprint by default
+    // (see updateGridMask) so the image reads cleanly instead of the grid
+    // showing through on top of it — an image layer's own showGridOverImage
+    // flag opts back in. userSpaceOnUse so the mask's own rects are plain
+    // world coordinates, same as everything else drawn in this SVG.
+    const defs = document.createElementNS(SVG_NS, 'defs')
+    this.gridMaskEl = document.createElementNS(SVG_NS, 'mask')
+    this.gridMaskEl.id = this.gridMaskId
+    this.gridMaskEl.setAttribute('maskUnits', 'userSpaceOnUse')
+    defs.appendChild(this.gridMaskEl)
+    this.svg.appendChild(defs)
+    this.gridLayer.setAttribute('mask', `url(#${this.gridMaskId})`)
+
     this.pipesLayer = this.createLayer('pipes-layer')
     this.contentLayer = this.createLayer('content-layer')
     this.shapesLayer = this.createLayer('shapes-layer')
@@ -416,6 +436,10 @@ export class SvgCanvas {
 
     this.applyViewBox()
     this.drawGrid()
+    // Seeds the mask's white base rect before any real syncLayers call — an
+    // empty <mask> would otherwise mean "fully hidden" and the grid would
+    // vanish entirely until the first layers sync.
+    this.updateGridMask([])
 
     this.resizeObserver = new ResizeObserver(() => this.syncViewBoxAspect())
     this.resizeObserver.observe(this.svg)
@@ -513,6 +537,37 @@ export class SvgCanvas {
     g.setAttribute('class', className)
     this.svg.appendChild(g)
     return g
+  }
+
+  /**
+   * Rebuilds the grid mask's contents: a huge always-white base rect (so the
+   * grid is fully visible with no image layers, or images that opted back
+   * in), then one black rect per image layer whose showGridOverImage flag
+   * isn't set — black punches the grid out there. World-space rects, not
+   * tied to the current viewBox, so this only needs recomputing when the
+   * layers themselves change (see syncLayers), not on every pan/zoom.
+   */
+  private updateGridMask(layers: readonly Layer[]) {
+    while (this.gridMaskEl.firstChild) this.gridMaskEl.removeChild(this.gridMaskEl.firstChild)
+
+    const base = document.createElementNS(SVG_NS, 'rect')
+    base.setAttribute('x', '-100000')
+    base.setAttribute('y', '-100000')
+    base.setAttribute('width', '200000')
+    base.setAttribute('height', '200000')
+    base.setAttribute('fill', 'white')
+    this.gridMaskEl.appendChild(base)
+
+    for (const layer of layers) {
+      if (layer.kind !== 'image' || layer.showGridOverImage) continue
+      const rect = document.createElementNS(SVG_NS, 'rect')
+      rect.setAttribute('x', String(layer.x))
+      rect.setAttribute('y', String(layer.y))
+      rect.setAttribute('width', String(layer.width))
+      rect.setAttribute('height', String(layer.height))
+      rect.setAttribute('fill', 'black')
+      this.gridMaskEl.appendChild(rect)
+    }
   }
 
   private applyViewBox() {
@@ -3162,6 +3217,7 @@ export class SvgCanvas {
    */
   syncLayers(layers: Layer[]) {
     this.latestLayers = layers
+    this.updateGridMask(layers)
     const seen = new Set<string>()
     for (const layer of layers) {
       if (layer.kind !== 'image') continue

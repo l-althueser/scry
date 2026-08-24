@@ -316,6 +316,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const setLayerLocked = useProjectStore((s) => s.setLayerLocked)
   const setLayerOpacity = useProjectStore((s) => s.setLayerOpacity)
   const setLayerIncludeInExport = useProjectStore((s) => s.setLayerIncludeInExport)
+  const setLayerShowGridOverImage = useProjectStore((s) => s.setLayerShowGridOverImage)
   const setLayerRect = useProjectStore((s) => s.setLayerRect)
   const imageAspectLocked = useProjectStore((s) => s.imageAspectLocked)
   const setImageAspectLocked = useProjectStore((s) => s.setImageAspectLocked)
@@ -990,6 +991,15 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               onChange={(e) => setLayerIncludeInExport(layer.layerId, e.target.checked)}
             />
             include in exported SVG
+          </label>
+
+          <label className="role-checkbox">
+            <input
+              type="checkbox"
+              checked={layer.showGridOverImage ?? false}
+              onChange={(e) => setLayerShowGridOverImage(layer.layerId, e.target.checked)}
+            />
+            show grid over this image
           </label>
 
           <label className="field">

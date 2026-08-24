@@ -928,6 +928,7 @@ interface ProjectState {
   setLayerLocked: (layerId: string, locked: boolean) => void
   setLayerOpacity: (layerId: string, opacity: number) => void
   setLayerIncludeInExport: (layerId: string, included: boolean) => void
+  setLayerShowGridOverImage: (layerId: string, show: boolean) => void
   setLayerRect: (layerId: string, rect: { x: number; y: number; width: number; height: number }) => void
   moveLayer: (layerId: string, direction: 'up' | 'down') => void
   moveImageLayer: (layerId: string, x: number, y: number) => void
@@ -2485,6 +2486,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ...pushHistory(state),
       layers: state.layers.map((l) =>
         l.layerId === layerId && l.kind === 'image' ? { ...l, includeInExport: included } : l,
+      ),
+    })),
+
+  setLayerShowGridOverImage: (layerId, show) =>
+    set((state) => ({
+      ...pushHistory(state),
+      layers: state.layers.map((l) =>
+        l.layerId === layerId && l.kind === 'image' ? { ...l, showGridOverImage: show } : l,
       ),
     })),
 
