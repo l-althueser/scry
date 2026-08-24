@@ -2867,6 +2867,8 @@ export class SvgCanvas {
     if (pipeEl) return { kind: 'pipe', id: pipeEl.getAttribute('data-pipe-id')! }
     const leaderLineEl = target.closest('[data-leader-line-id]') as SVGElement | null
     if (leaderLineEl) return { kind: 'leaderLine', id: leaderLineEl.getAttribute('data-leader-line-id')! }
+    const layerEl = target.closest('[data-layer-id]') as SVGElement | null
+    if (layerEl) return { kind: 'layer', id: layerEl.getAttribute('data-layer-id')! }
     return null
   }
 
