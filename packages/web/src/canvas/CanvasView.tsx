@@ -30,6 +30,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const connectionPointTargetLayerId = useProjectStore((s) => s.connectionPointTargetLayerId)
   const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
   const gridSize = useProjectStore((s) => s.gridSize)
+  const gridVisible = useProjectStore((s) => s.gridVisible)
   const selectedInstanceIds = useProjectStore((s) => s.selectedInstanceIds)
   const selectedRole = useProjectStore((s) => s.selectedRole)
   const selectedPipeIds = useProjectStore((s) => s.selectedPipeIds)
@@ -186,6 +187,10 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   useEffect(() => {
     canvasRef.current?.setGridSize(gridSize)
   }, [gridSize])
+
+  useEffect(() => {
+    canvasRef.current?.setGridVisible(gridVisible)
+  }, [gridVisible])
 
   return <div ref={containerRef} className="canvas-container" />
 })

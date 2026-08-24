@@ -10,6 +10,7 @@ import { downloadSvgFile, exportProjectToSvg } from './export/svgExport'
 import { listComponentTypes, useCustomComponentSpecs } from './library'
 import { ComponentIcon } from './components/ComponentIcon'
 import { describeComposition } from './state/selectionDescription'
+import { loadImageFile } from './import/loadImageFile'
 
 const SYNC_STATUS_LABELS: Record<string, string> = {
   unsaved: 'Not saved yet',
@@ -127,6 +128,8 @@ export default function App() {
   const setTool = useProjectStore((s) => s.setTool)
   const gridSize = useProjectStore((s) => s.gridSize)
   const setGridSize = useProjectStore((s) => s.setGridSize)
+  const gridVisible = useProjectStore((s) => s.gridVisible)
+  const setGridVisible = useProjectStore((s) => s.setGridVisible)
   const cancelTool = useProjectStore((s) => s.cancelTool)
   const instances = useProjectStore((s) => s.instances)
   const instanceCount = instances.length
@@ -151,6 +154,7 @@ export default function App() {
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId)
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const toggleLayersPanel = useProjectStore((s) => s.toggleLayersPanel)
+  const addImageLayer = useProjectStore((s) => s.addImageLayer)
   const closeLayersPanel = useProjectStore((s) => s.closeLayersPanel)
   const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
   const toggleSearchPanel = useProjectStore((s) => s.toggleSearchPanel)
@@ -202,6 +206,7 @@ export default function App() {
   const [importExportMenuOpen, setImportExportMenuOpen] = useState(false)
   const [errorToast, setErrorToast] = useState<string | null>(null)
   const importFileInputRef = useRef<HTMLInputElement>(null)
+  const addImageFileInputRef = useRef<HTMLInputElement>(null)
   const canvasViewRef = useRef<CanvasViewHandle>(null)
   const importExportMenuRef = useRef<HTMLDivElement>(null)
   const lastShownErrorRef = useRef<string | null>(null)
@@ -226,6 +231,21 @@ export default function App() {
     } catch (err) {
       console.error('Failed to import project file:', err)
       window.alert(`Could not import that file: ${(err as Error).message}`)
+    }
+  }
+
+  // Same handler as the Layers panel's own "Add image layer" button — a
+  // second, quicker entry point that doesn't require opening the Layers
+  // panel first (both call the same addImageLayer store action).
+  async function handleAddImageFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const { src, width, height } = await loadImageFile(file)
+      addImageLayer(file.name, src, width, height)
+    } catch (err) {
+      console.error('Failed to load image layer:', err)
     }
   }
   // Its identity changes whenever a custom type is added/edited/deleted — used
@@ -547,7 +567,7 @@ export default function App() {
           <button
             className={layersPanelOpen || selectedLayerId ? 'tool-button icon-button active' : 'tool-button icon-button'}
             onClick={() => toggleLayersPanel()}
-            title="Image layers: add background/reference images, drag or lock them, and place pipe connection points on them. Opens in the properties panel."
+            title="Layers: reorder image and shape layers against each other (e.g. put a colored shape behind a transparent image), toggle visibility, and edit an image's settings. Opens in the properties panel."
           >
             <span className="component-icon" aria-hidden="true">
               <svg viewBox="0 0 28 28">
@@ -556,8 +576,30 @@ export default function App() {
                 <path d="M4 19 L11 12 L16 17 L20 13 L24.5 18" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
               </svg>
             </span>
-            Image layers
+            Layers
           </button>
+          <button
+            className="tool-button icon-button"
+            onClick={() => addImageFileInputRef.current?.click()}
+            title="Add image: quickly add a new background/reference image layer without opening the Layers panel first."
+          >
+            <span className="component-icon" aria-hidden="true">
+              <svg viewBox="0 0 28 28">
+                <rect x="3" y="5" width="22" height="16" rx="1.5" fill="none" stroke="#000000" strokeWidth="2.5" />
+                <circle cx="9.5" cy="11" r="2.3" fill="none" stroke="#000000" strokeWidth="2.2" />
+                <path d="M4 19 L11 12 L16 17 L20 13 L24.5 18" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
+                <path d="M21 4 L21 12 M17 8 L25 8" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" />
+              </svg>
+            </span>
+            Add image
+          </button>
+          <input
+            ref={addImageFileInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleAddImageFile}
+          />
           <button
             className={searchPanelOpen ? 'tool-button icon-button active' : 'tool-button icon-button'}
             onClick={() => toggleSearchPanel()}
@@ -587,10 +629,17 @@ export default function App() {
           </button>
           <span className="toolbar-divider" aria-hidden="true" />
           <span className="toolbar-group" role="group" aria-label="Grid size">
+            <button
+              className={!gridVisible ? 'tool-button active' : 'tool-button'}
+              onClick={() => setGridVisible(false)}
+              title="Hide the grid entirely — snapping still uses the last-selected spacing, only the visible lines are hidden."
+            >
+              0×
+            </button>
             {GRID_SIZE_OPTIONS.map((opt) => (
               <button
                 key={opt.label}
-                className={gridSize === opt.value ? 'tool-button active' : 'tool-button'}
+                className={gridVisible && gridSize === opt.value ? 'tool-button active' : 'tool-button'}
                 onClick={() => setGridSize(opt.value)}
                 title={`Grid + snap spacing: ${opt.value} units`}
               >

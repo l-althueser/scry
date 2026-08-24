@@ -231,11 +231,17 @@ export type PipeEndpointSide = 'from' | 'to'
  */
 export class SvgCanvas {
   readonly svg: SVGSVGElement
-  readonly backgroundLayer: SVGGElement
   readonly gridLayer: SVGGElement
-  readonly pipesLayer: SVGGElement
-  readonly contentLayer: SVGGElement
-  readonly shapesLayer: SVGGElement
+  /**
+   * Dynamic z-order container: one <g data-layer-id> child per Layer
+   * (image or vector), re-appended in `layers` array order on every
+   * syncLayers call — appendChild on an already-parented node just moves
+   * it, so this is the entire "make DOM paint order match the array" step.
+   * Replaces the old fixed background/pipes/content/shapes groups, which
+   * could never interleave vector content with images. See
+   * getOrCreateImageLayerGroup / getOrCreateVectorLayerSubGroups.
+   */
+  readonly layersContainer: SVGGElement
   readonly leaderLinesLayer: SVGGElement
   readonly overlayLayer: SVGGElement
 
@@ -251,6 +257,12 @@ export class SvgCanvas {
   private shapeEls = new Map<string, SVGGElement>()
   private leaderLineEls = new Map<string, SVGGElement>()
   private imageLayerEls = new Map<string, SVGImageElement>()
+  /** layerId -> that layer's outer <g data-layer-id> inside layersContainer (image or vector). */
+  private layerGroupEls = new Map<string, SVGGElement>()
+  /** layerId -> a vector layer's three fixed-relative-order inner sub-groups (pipes under instances under shapes) — only 'default' ever has pipes/instances; every vector layer can have shapes. */
+  private vectorPipesSubEls = new Map<string, SVGGElement>()
+  private vectorContentSubEls = new Map<string, SVGGElement>()
+  private vectorShapesSubEls = new Map<string, SVGGElement>()
   private selectedInstanceIds: string[] = []
   private selectedRole: RoleSelection | null = null
   private selectedPipeIds: string[] = []
@@ -378,7 +390,6 @@ export class SvgCanvas {
     this.svg.style.setProperty('-webkit-user-select', 'none')
     container.appendChild(this.svg)
 
-    this.backgroundLayer = this.createLayer('background-layer')
     this.gridLayer = this.createLayer('grid-layer')
 
     // Punches out the grid under each image layer's footprint by default
@@ -394,9 +405,7 @@ export class SvgCanvas {
     this.svg.appendChild(defs)
     this.gridLayer.setAttribute('mask', `url(#${this.gridMaskId})`)
 
-    this.pipesLayer = this.createLayer('pipes-layer')
-    this.contentLayer = this.createLayer('content-layer')
-    this.shapesLayer = this.createLayer('shapes-layer')
+    this.layersContainer = this.createLayer('layers-container')
     this.leaderLinesLayer = this.createLayer('leader-lines-layer')
     this.overlayLayer = this.createLayer('overlay-layer')
 
@@ -445,6 +454,9 @@ export class SvgCanvas {
 
     this.applyViewBox()
     this.drawGrid()
+    // Hidden by default (matches the store's own gridVisible default) —
+    // avoids a flash of visible grid before CanvasView's own effect runs.
+    this.gridLayer.style.display = 'none'
     // Seeds the mask's white base rect before any real syncLayers call — an
     // empty <mask> would otherwise mean "fully hidden" and the grid would
     // vanish entirely until the first layers sync.
@@ -502,6 +514,11 @@ export class SvgCanvas {
     this.drawGrid()
   }
 
+  /** Purely visual — snapToGrid keeps using gridSize regardless, so hiding the grid never changes placement/snap behavior, only whether the lines are drawn. */
+  setGridVisible(visible: boolean) {
+    this.gridLayer.style.display = visible ? '' : 'none'
+  }
+
   destroy() {
     this.resizeObserver.disconnect()
     this.svg.removeEventListener('pointerdown', this.onPointerDown)
@@ -548,6 +565,66 @@ export class SvgCanvas {
     g.setAttribute('class', className)
     this.svg.appendChild(g)
     return g
+  }
+
+  /**
+   * Returns (creating if needed) an image layer's outer <g data-layer-id>
+   * inside layersContainer, holding its single <image> directly. Does NOT
+   * reorder anything or set the <image>'s own attributes — see syncLayers,
+   * the only place layer order/content actually changes.
+   */
+  private getOrCreateImageLayerGroup(layerId: string): SVGGElement {
+    let outer = this.layerGroupEls.get(layerId)
+    if (!outer) {
+      outer = document.createElementNS(SVG_NS, 'g')
+      outer.setAttribute('data-layer-id', layerId)
+      this.layersContainer.appendChild(outer)
+      this.layerGroupEls.set(layerId, outer)
+    }
+    return outer
+  }
+
+  /**
+   * Returns (creating if needed) a vector layer's outer <g data-layer-id>
+   * plus its three fixed-relative-order inner sub-groups (pipes, then
+   * instances, then shapes — the same relative order the old fixed
+   * pipesLayer/contentLayer/shapesLayer anchors always had). Every sync*
+   * method that used to append into one of those fixed groups now routes
+   * through here instead, keyed by the owning layer's id ('default' for
+   * pipes/instances, always; a shape's own layerId for shapes).
+   */
+  private getOrCreateVectorLayerSubGroups(layerId: string): {
+    outer: SVGGElement
+    pipesSub: SVGGElement
+    contentSub: SVGGElement
+    shapesSub: SVGGElement
+  } {
+    let outer = this.layerGroupEls.get(layerId)
+    if (!outer) {
+      outer = document.createElementNS(SVG_NS, 'g')
+      outer.setAttribute('data-layer-id', layerId)
+      this.layersContainer.appendChild(outer)
+      this.layerGroupEls.set(layerId, outer)
+    }
+    let pipesSub = this.vectorPipesSubEls.get(layerId)
+    if (!pipesSub) {
+      pipesSub = document.createElementNS(SVG_NS, 'g')
+      outer.appendChild(pipesSub)
+      this.vectorPipesSubEls.set(layerId, pipesSub)
+    }
+    let contentSub = this.vectorContentSubEls.get(layerId)
+    if (!contentSub) {
+      contentSub = document.createElementNS(SVG_NS, 'g')
+      outer.appendChild(contentSub)
+      this.vectorContentSubEls.set(layerId, contentSub)
+    }
+    let shapesSub = this.vectorShapesSubEls.get(layerId)
+    if (!shapesSub) {
+      shapesSub = document.createElementNS(SVG_NS, 'g')
+      outer.appendChild(shapesSub)
+      this.vectorShapesSubEls.set(layerId, shapesSub)
+    }
+    return { outer, pipesSub, contentSub, shapesSub }
   }
 
   /**
@@ -3059,7 +3136,7 @@ export class SvgCanvas {
         group = document.createElementNS(SVG_NS, 'g')
         group.setAttribute('data-instance-id', instance.instanceId)
         group.setAttribute('data-type-version', version)
-        this.contentLayer.appendChild(group)
+        this.getOrCreateVectorLayerSubGroups('default').contentSub.appendChild(group)
         this.instanceEls.set(instance.instanceId, group)
         def.render(group)
         group.classList.toggle('gv-selected', this.selectedInstanceIds.includes(instance.instanceId))
@@ -3111,7 +3188,7 @@ export class SvgCanvas {
       if (!group) {
         group = document.createElementNS(SVG_NS, 'g')
         group.setAttribute('data-pipe-id', pipe.instanceId)
-        this.pipesLayer.appendChild(group)
+        this.getOrCreateVectorLayerSubGroups('default').pipesSub.appendChild(group)
         this.pipeEls.set(pipe.instanceId, group)
 
         const linePath = document.createElementNS(SVG_NS, 'path')
@@ -3231,54 +3308,75 @@ export class SvgCanvas {
   }
 
   /**
-   * Reconciles background image layers (add/update/remove <image> elements,
-   * bottom of the z-order) and toggles the vector content's visibility per
-   * the "default" layer's own visible flag — hiding it lets the user see
-   * just the reference image underneath while tracing over it.
+   * Reconciles every layer's DOM group (image <image> elements; vector
+   * layers' sub-groups, created on demand) AND reorders them to match
+   * `layers` array order — this is the one place layer paint order actually
+   * changes, since it's the only sync* method CanvasView re-runs on a pure
+   * `layers` change (see its own useEffect wiring). 'default' always holds
+   * pipes/instances; every vector layer (including 'default') independently
+   * toggles its own visibility now — previously there was only ever one
+   * vector layer so a single shared visible flag was enough, but with
+   * multiple vector (shape) layers each needs its own.
    */
   syncLayers(layers: Layer[]) {
     this.latestLayers = layers
     this.updateGridMask(layers)
     const seen = new Set<string>()
+
     for (const layer of layers) {
-      if (layer.kind !== 'image') continue
       seen.add(layer.layerId)
-      let img = this.imageLayerEls.get(layer.layerId)
-      if (!img) {
-        img = document.createElementNS(SVG_NS, 'image')
-        img.setAttribute('data-layer-id', layer.layerId)
-        this.backgroundLayer.appendChild(img)
-        this.imageLayerEls.set(layer.layerId, img)
+      if (layer.kind === 'image') {
+        const outer = this.getOrCreateImageLayerGroup(layer.layerId)
+        let img = this.imageLayerEls.get(layer.layerId)
+        if (!img) {
+          img = document.createElementNS(SVG_NS, 'image')
+          img.setAttribute('data-layer-id', layer.layerId)
+          outer.appendChild(img)
+          this.imageLayerEls.set(layer.layerId, img)
+        }
+        img.style.display = layer.visible ? '' : 'none'
+        img.setAttribute('x', String(layer.x))
+        img.setAttribute('y', String(layer.y))
+        img.setAttribute('width', String(layer.width))
+        img.setAttribute('height', String(layer.height))
+        img.setAttribute('opacity', String(layer.opacity))
+        img.setAttribute('href', layer.src)
+        img.classList.toggle('gv-selected', layer.layerId === this.selectedLayerId)
+        // Locked (the default) means non-interactive — a reference image
+        // shouldn't intercept clicks meant for the grid/content underneath
+        // or on top, and can then only be selected/unlocked via the layers
+        // panel.
+        img.style.pointerEvents = layer.locked ? 'none' : 'auto'
+        img.style.cursor = layer.locked ? 'default' : 'move'
+      } else {
+        const { outer } = this.getOrCreateVectorLayerSubGroups(layer.layerId)
+        outer.style.display = layer.visible ? '' : 'none'
       }
-      img.style.display = layer.visible ? '' : 'none'
-      img.setAttribute('x', String(layer.x))
-      img.setAttribute('y', String(layer.y))
-      img.setAttribute('width', String(layer.width))
-      img.setAttribute('height', String(layer.height))
-      img.setAttribute('opacity', String(layer.opacity))
-      img.setAttribute('href', layer.src)
-      img.classList.toggle('gv-selected', layer.layerId === this.selectedLayerId)
-      // Locked (the default) means non-interactive — a reference image
-      // shouldn't intercept clicks meant for the grid/content underneath or
-      // on top, and can then only be selected/unlocked via the layers panel.
-      img.style.pointerEvents = layer.locked ? 'none' : 'auto'
-      img.style.cursor = layer.locked ? 'default' : 'move'
     }
-    for (const [id, el] of this.imageLayerEls) {
+
+    // Remove groups for deleted layers (image els + vector sub-group maps + the outer group itself).
+    for (const [id, outer] of this.layerGroupEls) {
       if (!seen.has(id)) {
-        el.remove()
+        outer.remove()
+        this.layerGroupEls.delete(id)
         this.imageLayerEls.delete(id)
+        this.vectorPipesSubEls.delete(id)
+        this.vectorContentSubEls.delete(id)
+        this.vectorShapesSubEls.delete(id)
       }
     }
     if (this.selectedLayerId && !seen.has(this.selectedLayerId)) {
       this.selectedLayerId = null
     }
 
-    const vectorLayer = layers.find((l) => l.kind === 'vector')
-    const vectorVisible = vectorLayer ? vectorLayer.visible : true
-    this.contentLayer.style.display = vectorVisible ? '' : 'none'
-    this.pipesLayer.style.display = vectorVisible ? '' : 'none'
-    this.shapesLayer.style.display = vectorVisible ? '' : 'none'
+    // Reorder: re-append every layer's outer group in array order
+    // (bottom-first, matching how `layers` is already stored elsewhere) —
+    // appendChild on an already-parented node just moves it, so this is
+    // the entire "make DOM paint order match the array" step.
+    for (const layer of layers) {
+      const outer = this.layerGroupEls.get(layer.layerId)
+      if (outer) this.layersContainer.appendChild(outer)
+    }
 
     this.refreshPortMarkers()
     this.refreshLayerResizeHandles()
@@ -3306,9 +3404,14 @@ export class SvgCanvas {
         group = document.createElementNS(SVG_NS, 'g')
         group.setAttribute('data-shape-id', shape.instanceId)
         group.style.cursor = 'move'
-        this.shapesLayer.appendChild(group)
         this.shapeEls.set(shape.instanceId, group)
       }
+      // Always re-parent (not just on creation) — appendChild on an
+      // already-correctly-parented node is a no-op move, but this is what
+      // makes reassigning a shape to a different layer (setShapeLayer)
+      // actually relocate its DOM on the next sync.
+      const { shapesSub } = this.getOrCreateVectorLayerSubGroups(shape.layerId || 'default')
+      shapesSub.appendChild(group)
       this.renderShapeInto(group, shape)
     }
 

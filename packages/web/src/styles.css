@@ -579,7 +579,7 @@ body {
 }
 
 /* Blue glow instead of overriding stroke/fill directly — shapes have user-chosen colors of their own. */
-.shapes-layer .gv-selected {
+[data-shape-id].gv-selected {
   filter: drop-shadow(0 0 2px #2563eb) drop-shadow(0 0 2px #2563eb);
 }
 

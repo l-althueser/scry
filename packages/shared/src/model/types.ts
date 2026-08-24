@@ -279,6 +279,8 @@ export interface ImageLayer extends LayerBase {
   src: string
   /** The pre-"Set Transparent Color" data URI, saved the first time that edit is applied (never overwritten by a later re-application, so it always holds the true original) — lets "Restore original image" undo the edit outside of undo history. Unset when no transparent-color edit has been applied (or after restoring). */
   originalSrc?: string
+  /** The color last picked via the eyedropper — remembered so changing the color-offset tolerance can re-derive `src` from `originalSrc` with the new tolerance, without re-picking. Unset alongside originalSrc. */
+  transparentColorHex?: string
   opacity: number
   /** Whether this background image is embedded in the exported live SVG or stays editor-only. */
   includeInExport: boolean

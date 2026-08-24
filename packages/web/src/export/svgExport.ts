@@ -60,16 +60,14 @@ export function exportProjectToSvg(
   )
   lines.push(`  <g id="viewport" fill="none">`)
 
-  // Background image layers render first (bottom of the stack), so the
-  // rest of the diagram draws on top of the reference image.
-  for (const layer of layers) {
-    if (layer.kind !== 'image' || !layer.includeInExport) continue
-    lines.push(
-      `    <image x="${fmt(layer.x)}" y="${fmt(layer.y)}" width="${fmt(layer.width)}" height="${fmt(layer.height)}" opacity="${fmt(layer.opacity)}" href="${escapeXml(layer.src)}" />`,
-    )
-  }
-
-  // Pipes render next (behind components), matching the canvas layer order.
+  // Mirrors the live canvas's own paint order exactly (see SvgCanvas.ts's
+  // syncLayers/layersContainer): one pass over `layers` in array order
+  // (bottom-first). An image layer emits its <image>; the 'default' vector
+  // layer additionally emits every pipe then every instance (pipes behind
+  // instances, same relative order as always); every vector layer
+  // (including 'default') emits the free shapes assigned to it. A shape
+  // whose layerId doesn't match any layer (e.g. an older saved project with
+  // no layers array at all) falls back to rendering alongside 'default'.
   const pointsByPipe = new Map<string, Point[]>()
   const displayPointsByPipe = new Map<string, Point[]>()
   for (const pipe of pipes) {
@@ -80,17 +78,44 @@ export function exportProjectToSvg(
     }
   }
   const nameLabelPipeIds = computeNameLabelPipeIds(pipes)
-  for (const pipe of pipes) {
-    lines.push(...exportPipeInstance(pipe, pipes, pointsByPipe, displayPointsByPipe, nameLabelPipeIds.has(pipe.instanceId)))
+  const knownLayerIds = new Set(layers.map((l) => l.layerId))
+  const hasDefaultLayer = layers.some((l) => l.kind === 'vector' && l.layerId === 'default')
+
+  const exportPipesAndInstances = () => {
+    for (const pipe of pipes) {
+      lines.push(
+        ...exportPipeInstance(pipe, pipes, pointsByPipe, displayPointsByPipe, nameLabelPipeIds.has(pipe.instanceId)),
+      )
+    }
+    for (const inst of instances) {
+      lines.push(...getComponentType(inst.componentTypeId).exportInstance(inst))
+    }
+  }
+  // Defensive fallback for a project whose `layers` array somehow has no
+  // 'default' entry (shouldn't happen — the store always seeds/reseeds it,
+  // and the UI never allows deleting it — but pipes/instances, and any
+  // shape that would have resolved to 'default', must never silently
+  // vanish from the export if it's ever missing).
+  if (!hasDefaultLayer) {
+    exportPipesAndInstances()
+    for (const shape of freeShapes) {
+      if (!shape.layerId || !knownLayerIds.has(shape.layerId)) lines.push(...exportFreeShape(shape))
+    }
   }
 
-  for (const inst of instances) {
-    lines.push(...getComponentType(inst.componentTypeId).exportInstance(inst))
-  }
-
-  // Annotation shapes render last (on top) — they're typically call-outs/highlights meant to sit over the diagram.
-  for (const shape of freeShapes) {
-    lines.push(...exportFreeShape(shape))
+  for (const layer of layers) {
+    if (layer.kind === 'image') {
+      if (!layer.includeInExport) continue
+      lines.push(
+        `    <image x="${fmt(layer.x)}" y="${fmt(layer.y)}" width="${fmt(layer.width)}" height="${fmt(layer.height)}" opacity="${fmt(layer.opacity)}" href="${escapeXml(layer.src)}" />`,
+      )
+      continue
+    }
+    if (layer.layerId === 'default') exportPipesAndInstances()
+    for (const shape of freeShapes) {
+      const shapeLayerId = shape.layerId && knownLayerIds.has(shape.layerId) ? shape.layerId : 'default'
+      if (shapeLayerId === layer.layerId) lines.push(...exportFreeShape(shape))
+    }
   }
 
   // Leader lines render last of all — annotation pointers meant to sit above everything, including free shapes.

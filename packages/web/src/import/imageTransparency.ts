@@ -33,8 +33,17 @@ export async function samplePixelColor(src: string, relX: number, relY: number):
   return toHex(r, g, b)
 }
 
-/** Re-encodes the image with every pixel exactly matching hexColor made fully transparent. */
-export async function applyTransparentColor(src: string, hexColor: string): Promise<string> {
+/**
+ * Re-encodes the image with every pixel "close enough" to hexColor made
+ * fully transparent. `tolerance` (0-255, default 0 = exact match only) is
+ * the max allowed per-channel (R/G/B) absolute difference — a pixel is
+ * cleared when EVERY channel is within tolerance, not just on average, so a
+ * small tolerance still can't accidentally sweep in a visually distinct
+ * color. Useful for real-world images (JPEG artifacts, anti-aliased edges,
+ * slightly-off "white" backgrounds) where an exact match would miss most of
+ * the intended area.
+ */
+export async function applyTransparentColor(src: string, hexColor: string, tolerance = 0): Promise<string> {
   const img = await loadImage(src)
   const ctx = drawToCanvas(img)
   const { width, height } = ctx.canvas
@@ -45,7 +54,11 @@ export async function applyTransparentColor(src: string, hexColor: string): Prom
   const tg = parseInt(hex.slice(2, 4), 16)
   const tb = parseInt(hex.slice(4, 6), 16)
   for (let i = 0; i < data.length; i += 4) {
-    if (data[i] === tr && data[i + 1] === tg && data[i + 2] === tb) {
+    if (
+      Math.abs(data[i] - tr) <= tolerance &&
+      Math.abs(data[i + 1] - tg) <= tolerance &&
+      Math.abs(data[i + 2] - tb) <= tolerance
+    ) {
       data[i + 3] = 0
     }
   }

@@ -311,6 +311,8 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const layersPanelOpen = useProjectStore((s) => s.layersPanelOpen)
   const layers = useProjectStore((s) => s.layers)
   const addImageLayer = useProjectStore((s) => s.addImageLayer)
+  const addShapeLayer = useProjectStore((s) => s.addShapeLayer)
+  const setShapeLayer = useProjectStore((s) => s.setShapeLayer)
   const renameLayer = useProjectStore((s) => s.renameLayer)
   const setLayerVisible = useProjectStore((s) => s.setLayerVisible)
   const setLayerLocked = useProjectStore((s) => s.setLayerLocked)
@@ -329,6 +331,8 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const setTool = useProjectStore((s) => s.setTool)
   const tool = useProjectStore((s) => s.tool)
   const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
+  const transparentColorTolerance = useProjectStore((s) => s.transparentColorTolerance)
+  const setTransparentColorTolerance = useProjectStore((s) => s.setTransparentColorTolerance)
   const restoreOriginalImage = useProjectStore((s) => s.restoreOriginalImage)
   const checkpointHistory = useProjectStore((s) => s.checkpointHistory)
   const searchPanelOpen = useProjectStore((s) => s.searchPanelOpen)
@@ -367,6 +371,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const selectedLeaderLines = leaderLines.filter((l) => selectedLeaderLineIds.includes(l.instanceId))
 
   const selectedLayer = layers.find((l) => l.layerId === selectedLayerId)
+  const vectorLayers = layers.filter((l) => l.kind === 'vector')
 
   // Computed unconditionally (not inside the search-mode branch below) so
   // this stays a plain hook call every render, same as every other useMemo
@@ -807,6 +812,31 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       <aside className="properties-panel">
         <h2 title="Purely a visual annotation — untagged, so Node-RED never reads or targets it.">Shape properties</h2>
 
+        <label className="field">
+          <span>
+            Layer
+            <InfoIcon text="Which layer this shape paints on — reorder layers in the Layers panel to put a shape behind or in front of an image layer." />
+          </span>
+          <select
+            value={shape.layerId}
+            onChange={(e) => {
+              if (e.target.value === '__new__') {
+                const newLayerId = addShapeLayer()
+                setShapeLayer(shape.instanceId, newLayerId)
+              } else {
+                setShapeLayer(shape.instanceId, e.target.value)
+              }
+            }}
+          >
+            {vectorLayers.map((l) => (
+              <option key={l.layerId} value={l.layerId}>
+                {l.name}
+              </option>
+            ))}
+            <option value="__new__">New layer…</option>
+          </select>
+        </label>
+
         {shape.kind === 'text' && (
           <fieldset className="field roles-field">
             <legend>Text</legend>
@@ -1005,10 +1035,24 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
             show grid over this image
           </label>
 
+          <label className="field">
+            <span>
+              Color offset
+              <InfoIcon text="How close a pixel's color has to be to the clicked one to also become transparent (per color channel, 0-255). 0 = exact match only; higher catches JPEG noise, anti-aliased edges, or an off-white background too — but too high can eat into colors you meant to keep." />
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={255}
+              value={transparentColorTolerance}
+              onChange={(e) => setTransparentColorTolerance(Number(e.target.value) || 0, layer.layerId)}
+            />
+          </label>
+
           <div className="field-row">
             <button
               onClick={() => setTool('pick-transparent-color', layer.layerId)}
-              title="Click, then click a pixel on the image — that exact color becomes transparent everywhere in the image, same as PowerPoint's 'Set Transparent Color' (e.g. removing a white background)."
+              title="Click, then click a pixel on the image — that color (within the offset below) becomes transparent everywhere in the image, same as PowerPoint's 'Set Transparent Color' (e.g. removing a white background)."
             >
               Set transparent color
             </button>
@@ -1272,7 +1316,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
     return (
       <aside className="properties-panel">
         <div className="field-row properties-panel-header">
-          <h2>Image layers</h2>
+          <h2>Layers</h2>
           <button className="tool-button" title="Close" onClick={() => closeLayersPanel()}>
             &times;
           </button>
@@ -1286,24 +1330,27 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
         </div>
 
         <ul className="layer-list">
-          {displayLayers.map((layer, displayIndex) => (
-            <li key={layer.layerId} className="layer-row">
-              <label className="layer-visible-toggle" title={layer.visible ? 'Hide layer' : 'Show layer'}>
-                <input
-                  type="checkbox"
-                  checked={layer.visible}
-                  onChange={(e) => setLayerVisible(layer.layerId, e.target.checked)}
-                />
-              </label>
-              <button
-                className="layer-name-button"
-                onClick={() => selectLayer(layer.layerId)}
-                title={layer.kind === 'image' ? 'Click for settings, position, and connection points' : layer.name}
-              >
-                {layer.kind === 'image' && layer.locked ? '\u{1F512} ' : ''}
-                {layer.name}
-              </button>
-              {layer.kind === 'image' && (
+          {displayLayers.map((layer, displayIndex) => {
+            const isDefaultVectorLayer = layer.kind === 'vector' && layer.layerId === 'default'
+            const shapeLayerNonEmpty =
+              layer.kind === 'vector' && !isDefaultVectorLayer && freeShapes.some((s) => s.layerId === layer.layerId)
+            return (
+              <li key={layer.layerId} className="layer-row">
+                <label className="layer-visible-toggle" title={layer.visible ? 'Hide layer' : 'Show layer'}>
+                  <input
+                    type="checkbox"
+                    checked={layer.visible}
+                    onChange={(e) => setLayerVisible(layer.layerId, e.target.checked)}
+                  />
+                </label>
+                <button
+                  className="layer-name-button"
+                  onClick={() => selectLayer(layer.layerId)}
+                  title={layer.kind === 'image' ? 'Click for settings, position, and connection points' : layer.name}
+                >
+                  {layer.kind === 'image' && layer.locked ? '\u{1F512} ' : ''}
+                  {layer.name}
+                </button>
                 <div className="layer-row-buttons">
                   <button
                     className="tool-button"
@@ -1321,13 +1368,20 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
                   >
                     &darr;
                   </button>
-                  <button className="tool-button danger" title="Delete layer" onClick={() => deleteLayer(layer.layerId)}>
-                    &times;
-                  </button>
+                  {!isDefaultVectorLayer && (
+                    <button
+                      className="tool-button danger"
+                      disabled={shapeLayerNonEmpty}
+                      title={shapeLayerNonEmpty ? 'Move or delete this layer’s shapes first' : 'Delete layer'}
+                      onClick={() => deleteLayer(layer.layerId)}
+                    >
+                      &times;
+                    </button>
+                  )}
                 </div>
-              )}
-            </li>
-          ))}
+              </li>
+            )
+          })}
         </ul>
         <p className="field-hint">Click a layer&apos;s name to edit its settings here.</p>
       </aside>

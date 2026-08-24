@@ -25,6 +25,7 @@ import {
   type ScryClipboardPayload,
   type Suffix,
   type TextAlign,
+  type VectorLayer,
   type Waypoint,
 } from '@svg-editor/shared'
 import { getComponentType, rotatePoint } from '../library'
@@ -733,7 +734,11 @@ interface ProjectState {
   connectionPointTargetLayerId: string | null
   /** Non-null while the "pick transparent color" eyedropper tool is armed for an image layer — see pickTransparentColorAt. */
   pickTransparentColorTargetLayerId: string | null
+  /** Max per-channel color difference (0-255) still counted as a match — see applyTransparentColor. 0 = exact match only. A UI setting, not per-image, so it carries over between picks like the regex-search fields do. */
+  transparentColorTolerance: number
   gridSize: number
+  /** Whether the grid is drawn at all — independent of gridSize, which stays the snap spacing even while the grid is hidden. Defaults to hidden (the "0x" toolbar option). */
+  gridVisible: boolean
   tagRenameError: string | null
   /** Set when autoRoutePipe fails to find an obstacle-free path (e.g. fully boxed in); cleared on the next successful route or pipe (re)selection. */
   routeError: string | null
@@ -833,6 +838,7 @@ interface ProjectState {
   cancelTool: () => void
   /** Not part of undo history (a view/editor setting, like imageAspectLocked) even though it's also saved into the project's meta on export. */
   setGridSize: (size: number) => void
+  setGridVisible: (visible: boolean) => void
 
   /** Pushes one undo checkpoint without changing any state — call once at the start of a multi-step drag. */
   checkpointHistory: () => void
@@ -925,6 +931,10 @@ interface ProjectState {
   pasteFromClipboardText: (text: string) => void
 
   addImageLayer: (name: string, src: string, width: number, height: number) => void
+  /** Creates a new, initially empty vector layer a free shape can be moved onto (see setShapeLayer) — returned synchronously so the caller can immediately assign a shape to it. */
+  addShapeLayer: (name?: string) => string
+  /** Moves one free shape onto a different (or newly created) vector layer. */
+  setShapeLayer: (shapeId: string, layerId: string) => void
   deleteLayer: (layerId: string) => void
   renameLayer: (layerId: string, name: string) => void
   setLayerVisible: (layerId: string, visible: boolean) => void
@@ -956,8 +966,10 @@ interface ProjectState {
   /** keepPlacing is true when Shift was held, so the tool stays active for placing several points in a row. */
   addConnectionPoint: (layerId: string, relX: number, relY: number, keepPlacing?: boolean) => void
   deleteConnectionPoint: (layerId: string, pointId: string) => void
-  /** The "pick transparent color" eyedropper: samples the pixel at relX/relY (fractions of the image's footprint) and re-encodes the image with every matching pixel made transparent — one-shot, exits the tool on completion. */
+  /** The "pick transparent color" eyedropper: samples the pixel at relX/relY (fractions of the image's footprint) and re-encodes the image with every pixel within transparentColorTolerance made transparent — one-shot, exits the tool on completion. */
   pickTransparentColorAt: (layerId: string, relX: number, relY: number) => Promise<void>
+  /** Updates the tolerance; if layerId is given and that layer has a remembered pick (originalSrc + transparentColorHex), immediately re-derives src from originalSrc at the new tolerance. */
+  setTransparentColorTolerance: (tolerance: number, layerId?: string) => void
   /** Reverts to the pre-edit image saved in ImageLayer.originalSrc (see pickTransparentColorAt) — a no-op if no transparent-color edit has been applied. */
   restoreOriginalImage: (layerId: string) => void
 
@@ -1027,7 +1039,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   drawingShapeKind: null,
   connectionPointTargetLayerId: null,
   pickTransparentColorTargetLayerId: null,
+  transparentColorTolerance: 0,
   gridSize: BASE_GRID_SIZE / 8,
+  gridVisible: false,
   tagRenameError: null,
   routeError: null,
   groupDragOrigins: null,
@@ -1591,7 +1605,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       pickTransparentColorTargetLayerId: null,
     }),
 
-  setGridSize: (size) => set({ gridSize: size }),
+  // Picking a concrete size implies wanting to see it — also turns the grid
+  // back on if "0x" (hidden) was active.
+  setGridSize: (size) => set({ gridSize: size, gridVisible: true }),
+  setGridVisible: (visible) => set({ gridVisible: visible }),
 
   checkpointHistory: () => set((state) => pushHistory(state)),
 
@@ -2462,6 +2479,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return { ...pushHistory(state), layers: [...state.layers, layer] }
     }),
 
+  addShapeLayer: (name) => {
+    const layerId = crypto.randomUUID()
+    set((state) => {
+      const shapeLayerCount = state.layers.filter((l) => l.kind === 'vector' && l.layerId !== 'default').length
+      const layer: VectorLayer = {
+        layerId,
+        name: name ?? `Shape layer ${shapeLayerCount + 1}`,
+        visible: true,
+        locked: false,
+        kind: 'vector',
+      }
+      return { ...pushHistory(state), layers: [...state.layers, layer] }
+    })
+    return layerId
+  },
+
+  setShapeLayer: (shapeId, layerId) =>
+    set((state) => ({
+      ...pushHistory(state),
+      freeShapes: state.freeShapes.map((s) => (s.instanceId === shapeId ? { ...s, layerId } : s)),
+    })),
+
   // Note: doesn't cascade-delete instances/shapes whose layerId pointed at
   // this layer (that's pre-existing behavior, unrelated to grouping) — since
   // no instance/pipe/shape/leaderLine record is actually removed here, there
@@ -2659,18 +2698,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!layer || layer.kind !== 'image') return
     try {
       const hexColor = await samplePixelColor(layer.src, relX, relY)
-      const newSrc = await applyTransparentColor(layer.src, hexColor)
+      const newSrc = await applyTransparentColor(layer.src, hexColor, get().transparentColorTolerance)
       set((state) => ({
         ...pushHistory(state),
         layers: state.layers.map((l) =>
           l.layerId === layerId && l.kind === 'image'
-            ? { ...l, src: newSrc, originalSrc: l.originalSrc ?? l.src }
+            ? { ...l, src: newSrc, originalSrc: l.originalSrc ?? l.src, transparentColorHex: hexColor }
             : l,
         ),
       }))
     } catch (err) {
       console.error(`Failed to apply transparent color for layer "${layerId}":`, err)
     }
+  },
+
+  setTransparentColorTolerance: (tolerance, layerId) => {
+    const clamped = Math.max(0, Math.min(255, tolerance))
+    set({ transparentColorTolerance: clamped })
+    if (!layerId) return
+    const layer = get().layers.find((l) => l.layerId === layerId)
+    if (!layer || layer.kind !== 'image' || !layer.originalSrc || !layer.transparentColorHex) return
+    applyTransparentColor(layer.originalSrc, layer.transparentColorHex, clamped)
+      .then((newSrc) => {
+        set((state) => ({
+          ...pushHistory(state),
+          layers: state.layers.map((l) => (l.layerId === layerId && l.kind === 'image' ? { ...l, src: newSrc } : l)),
+        }))
+      })
+      .catch((err) => {
+        console.error(`Failed to reapply transparent color for layer "${layerId}":`, err)
+      })
   },
 
   restoreOriginalImage: (layerId) =>
@@ -2680,7 +2737,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return {
         ...pushHistory(state),
         layers: state.layers.map((l) =>
-          l.layerId === layerId && l.kind === 'image' ? { ...l, src: l.originalSrc!, originalSrc: undefined } : l,
+          l.layerId === layerId && l.kind === 'image'
+            ? { ...l, src: l.originalSrc!, originalSrc: undefined, transparentColorHex: undefined }
+            : l,
         ),
       }
     }),
