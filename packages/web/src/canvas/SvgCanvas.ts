@@ -319,6 +319,8 @@ export class SvgCanvas {
   private groupDragStartWorld: Point = { x: 0, y: 0 }
   /** Drag-start anchors, used for Shift axis-locking (movement constrained relative to these). */
   private dragInstanceStartPos: Point = { x: 0, y: 0 }
+  /** World-space offset between the pointer and the instance's own origin at drag start — subtracted from the pointer's position on every move so the origin keeps its place under the grabbed point instead of jumping to the cursor. */
+  private dragInstanceGrabOffset: Point = { x: 0, y: 0 }
   private dragRoleStartWorld: Point = { x: 0, y: 0 }
   private dragWaypointStartWorld: Point = { x: 0, y: 0 }
   private dragShapeId: string | null = null
@@ -1964,6 +1966,7 @@ export class SvgCanvas {
       this.dragStartScreen = { x: evt.clientX, y: evt.clientY }
       const inst = this.latestInstances.find((i) => i.instanceId === instanceId)
       this.dragInstanceStartPos = inst ? { x: inst.transform.x, y: inst.transform.y } : world
+      this.dragInstanceGrabOffset = { x: world.x - this.dragInstanceStartPos.x, y: world.y - this.dragInstanceStartPos.y }
       return
     }
 
@@ -2351,9 +2354,14 @@ export class SvgCanvas {
 
     if (this.dragMode === 'move-instance' && this.dragInstanceId) {
       const world = this.screenToWorld(evt.clientX, evt.clientY)
+      // The instance's origin, not the raw pointer, is what gets snapped/
+      // positioned — keeps the point the user actually grabbed fixed under
+      // the cursor instead of the origin jumping to the cursor on the first
+      // move frame (the bug when grabbing a box anywhere but its corner).
+      const target = { x: world.x - this.dragInstanceGrabOffset.x, y: world.y - this.dragInstanceGrabOffset.y }
       let snapped: Point
       if (evt.shiftKey) {
-        const gridSnapped = this.snapToGrid(world)
+        const gridSnapped = this.snapToGrid(target)
         const delta = this.constrainDeltaToAxis({
           x: gridSnapped.x - this.dragInstanceStartPos.x,
           y: gridSnapped.y - this.dragInstanceStartPos.y,
@@ -2363,12 +2371,12 @@ export class SvgCanvas {
       } else {
         const instance = this.latestInstances.find((i) => i.instanceId === this.dragInstanceId)
         const refs = this.collectAlignReferences({ excludeInstanceIds: new Set([this.dragInstanceId]) })
-        const candidates = instance ? this.instancePortWorldPositions(instance, world) : []
+        const candidates = instance ? this.instancePortWorldPositions(instance, target) : []
         const { correctionX, correctionY, guideX, guideY } = this.bestAxisAlignment(candidates, refs)
-        const gridSnapped = this.snapToGrid(world)
+        const gridSnapped = this.snapToGrid(target)
         snapped = {
-          x: correctionX !== null ? world.x + correctionX : gridSnapped.x,
-          y: correctionY !== null ? world.y + correctionY : gridSnapped.y,
+          x: correctionX !== null ? target.x + correctionX : gridSnapped.x,
+          y: correctionY !== null ? target.y + correctionY : gridSnapped.y,
         }
         if (guideX !== null || guideY !== null) this.showAlignGuides(guideX, guideY)
         else this.hideAlignGuides()
