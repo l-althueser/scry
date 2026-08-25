@@ -15,6 +15,7 @@ import {
   roleTransformAttr,
   rotatePoint,
 } from './componentUtils'
+import { PIPE_DEFAULT_COLOR } from '../pipes/pipeGeometry'
 import { registerComponentType, type InstanceOptionDescriptor } from './registry'
 
 export interface PathShape {
@@ -39,8 +40,18 @@ export interface IconComponentSpec {
   category: string
   /** Union of paths making up the "_indicator" status-color silhouette (fill lives only on the group, per CLAUDE.md). */
   indicatorShapes: PathShape[]
-  /** Extra decorative-only paths (stubs, blades, ...) drawn alongside the silhouette but never colored by it. */
+  /** Extra decorative-only paths (blades, stems, ticks, ...) drawn alongside the silhouette but never colored by it — for a short pipe-connector stub, use pipeStubs instead so it gets the per-instance pipe color option. */
   outlineExtras?: PathShape[]
+  /**
+   * The short pipe-connector stub(s) bridging the body to where a real pipe
+   * attaches (e.g. a compressor's or flow meter's in/out nubs) — visually
+   * "a small pipe section", so unlike outlineExtras these get a per-instance
+   * `pipeColor` property (defaulting to the same black every real pipe
+   * defaults to) instead of a hardcoded black stroke. Also exposed on a
+   * multi-selection's shared "Pipes" style swatch alongside real pipes' own
+   * line color — see applyStyleFieldToIds in projectStore.ts.
+   */
+  pipeStubs?: PathShape[]
   /** Imported image drawn as the base of the body, underneath the indicator/outline shapes. */
   bodyImage?: BodyImage | null
   localBodyCorners: { x: number; y: number }[]
@@ -92,12 +103,17 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
   const labelStartY = spec.labelStartY ?? DEFAULT_LABEL_START_Y
   const optionalExtras = spec.optionalExtras ?? []
 
+  const pipeStubs = spec.pipeStubs ?? []
+
   const instanceOptions: InstanceOptionDescriptor[] = []
   if (spec.mirrorable) {
     instanceOptions.push({ key: 'mirrored', kind: 'boolean', label: 'Mirror horizontally', default: false })
   }
   if (spec.colorable) {
     instanceOptions.push({ key: 'fillColor', kind: 'color', label: 'Fill color', default: spec.defaultFillColor ?? '#000000' })
+  }
+  if (pipeStubs.length > 0) {
+    instanceOptions.push({ key: 'pipeColor', kind: 'color', label: 'Pipe color', default: PIPE_DEFAULT_COLOR })
   }
   for (const extra of optionalExtras) {
     instanceOptions.push({ key: extra.propertyKey, kind: 'boolean', label: extra.label, default: false })
@@ -111,6 +127,11 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     if (!spec.colorable) return 'none'
     const value = instance.propertyValues.fillColor
     return typeof value === 'string' && value ? value : (spec.defaultFillColor ?? '#000000')
+  }
+
+  function pipeStubColor(instance: ComponentInstance): string {
+    const value = instance.propertyValues.pipeColor
+    return typeof value === 'string' && value ? value : PIPE_DEFAULT_COLOR
   }
 
   /**
@@ -243,6 +264,21 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     }
     bodyGroup.appendChild(extrasOutlineGroup)
 
+    // Pipe-connector stubs get their own group (fill:none like the outline
+    // extras, so only the stroke shows) with the stroke color set per
+    // instance in update() — see pipeStubColor — instead of the hardcoded
+    // black every other outline extra uses.
+    const pipeStubGroup = document.createElementNS(SVG_NS, 'g')
+    pipeStubGroup.setAttribute('class', 'gv-pipe-stub')
+    pipeStubGroup.setAttribute('fill', 'none')
+    for (const shape of pipeStubs) {
+      const path = document.createElementNS(SVG_NS, 'path')
+      path.setAttribute('d', shape.d)
+      path.setAttribute('stroke-width', String(shape.strokeWidth ?? 1.5))
+      pipeStubGroup.appendChild(path)
+    }
+    bodyGroup.appendChild(pipeStubGroup)
+
     group.appendChild(bodyGroup)
 
     if (spec.category === 'Valves') {
@@ -293,6 +329,9 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
 
     const bodyFillGroup = group.querySelector<SVGGElement>('.gv-valve-body-fill')
     bodyFillGroup?.setAttribute('fill', bodyFillColor(instance))
+
+    const pipeStubGroup = group.querySelector<SVGGElement>('.gv-pipe-stub')
+    pipeStubGroup?.setAttribute('stroke', pipeStubColor(instance))
 
     for (const extra of optionalExtras) {
       const extraGroup = group.querySelector<SVGGElement>(`[data-optional-key="${extra.propertyKey}"]`)
@@ -359,6 +398,14 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       lines.push(
         `      <path d="${shape.d}" fill="none" stroke="#000000" stroke-width="${shape.strokeWidth ?? 1.5}" />`,
       )
+    }
+    if (pipeStubs.length > 0) {
+      const stubColor = escapeXml(pipeStubColor(instance))
+      for (const shape of pipeStubs) {
+        lines.push(
+          `      <path d="${shape.d}" fill="none" stroke="${stubColor}" stroke-width="${shape.strokeWidth ?? 1.5}" />`,
+        )
+      }
     }
     lines.push(`    </g>`)
 

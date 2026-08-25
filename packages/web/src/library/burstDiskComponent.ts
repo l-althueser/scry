@@ -14,10 +14,11 @@ registerIconComponentType({
   tagPrefix: 'BD',
   category: 'Equipment',
   indicatorShapes: [{ d: HOUSING_D }],
+  outlineExtras: [{ d: MEMBRANE_D }],
   // Stubs get strokeWidth 2 to match a connected pipe's own line width (2,
   // see SvgCanvas.ts's pipe rendering) — thinner (the default 1.5) reads as
   // a mismatch right where the pipe actually meets the component.
-  outlineExtras: [{ d: MEMBRANE_D }, { d: STUB_IN_D, strokeWidth: 2 }, { d: STUB_OUT_D, strokeWidth: 2 }],
+  pipeStubs: [{ d: STUB_IN_D, strokeWidth: 2 }, { d: STUB_OUT_D, strokeWidth: 2 }],
   localBodyCorners: [
     { x: 0, y: 0 },
     { x: 34.02, y: 0 },

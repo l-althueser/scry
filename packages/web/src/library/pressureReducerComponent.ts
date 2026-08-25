@@ -26,7 +26,7 @@ registerIconComponentType({
   indicatorShapes: [{ d: BIG_TRIANGLE_D }, { d: SMALL_TRIANGLE_D }],
   // Stub gets strokeWidth 2 to match a connected pipe's own line width, same
   // convention burstDiskComponent.ts uses for its stubs.
-  outlineExtras: [{ d: STUB_OUT_D, strokeWidth: 2 }],
+  pipeStubs: [{ d: STUB_OUT_D, strokeWidth: 2 }],
   localBodyCorners: [
     { x: 0, y: 0 },
     { x: 34.02, y: 0 },

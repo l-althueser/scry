@@ -42,8 +42,8 @@ registerIconComponentType({
   tagPrefix: 'HE',
   category: 'Equipment',
   indicatorShapes: [{ d: CIRCLE_D }],
-  outlineExtras: [
-    { d: CHEVRON_D },
+  outlineExtras: [{ d: CHEVRON_D }],
+  pipeStubs: [
     { d: PIPE_TOP_D, strokeWidth: 2 },
     { d: PIPE_BOTTOM_D, strokeWidth: 2 },
     { d: STUB_TOP_D, strokeWidth: 2 },

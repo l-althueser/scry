@@ -28,7 +28,7 @@ import {
   type VectorLayer,
   type Waypoint,
 } from '@svg-editor/shared'
-import { getComponentType, rotatePoint } from '../library'
+import { componentHasPipeColorOption, getComponentType, rotatePoint } from '../library'
 import type { Tool, Point } from '../canvas/SvgCanvas'
 import * as api from '../api/client'
 import { exportProjectToSvg } from '../export/svgExport'
@@ -563,6 +563,12 @@ function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipbo
  * no style fields at all so they're never a valid `kind` here. Shared
  * between the persisted-group and loose-multi-select editors so both
  * broadcast identically.
+ *
+ * `pipeStubInstanceIds` (kind === 'pipe' only) is the selection's instances
+ * that have their own "pipe color" option (see componentHasPipeColorOption)
+ * — a component's small pipe-connector stub is visually part of "the pipe",
+ * so the shared Pipes swatch recolors those alongside any real selected
+ * pipes rather than requiring a separate control.
  */
 function applyStyleFieldToIds(
   state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes'>,
@@ -570,6 +576,7 @@ function applyStyleFieldToIds(
   ids: Set<string>,
   field: 'fill' | 'stroke' | 'text',
   value: string | null,
+  pipeStubInstanceIds: Set<string> = new Set(),
 ): Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes'> {
   if (kind === 'instance') {
     const roleKey = field === 'fill' ? 'fillColor' : field === 'stroke' ? 'strokeColor' : 'textColor'
@@ -588,7 +595,11 @@ function applyStyleFieldToIds(
     if (field !== 'stroke') return { instances: state.instances, pipes: state.pipes, freeShapes: state.freeShapes }
     const expanded = expandToVolumeSiblings(state.pipes, ids)
     return {
-      instances: state.instances,
+      instances: state.instances.map((inst) =>
+        pipeStubInstanceIds.has(inst.instanceId)
+          ? { ...inst, propertyValues: { ...inst.propertyValues, pipeColor: value } }
+          : inst,
+      ),
       pipes: state.pipes.map((p) => (expanded.has(p.instanceId) ? { ...p, strokeColor: value } : p)),
       freeShapes: state.freeShapes,
     }
@@ -2489,7 +2500,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const group = state.groups.find((g) => g.groupId === groupId)
       if (!group) return {}
       const ids = new Set(group.members.filter((m) => m.kind === kind).map((m) => m.id))
-      return { ...pushHistory(state), ...applyStyleFieldToIds(state, kind, ids, field, value) }
+      const pipeStubInstanceIds =
+        kind === 'pipe'
+          ? new Set(
+              group.members
+                .filter((m) => m.kind === 'instance')
+                .map((m) => state.instances.find((inst) => inst.instanceId === m.id))
+                .filter((inst): inst is ComponentInstance => !!inst && componentHasPipeColorOption(inst.componentTypeId))
+                .map((inst) => inst.instanceId),
+            )
+          : undefined
+      return { ...pushHistory(state), ...applyStyleFieldToIds(state, kind, ids, field, value, pipeStubInstanceIds) }
     }),
 
   /**
@@ -2507,7 +2528,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           : kind === 'pipe'
             ? new Set(state.selectedPipeIds)
             : new Set(state.selectedShapeIds)
-      return { ...pushHistory(state), ...applyStyleFieldToIds(state, kind, ids, field, value) }
+      const pipeStubInstanceIds =
+        kind === 'pipe'
+          ? new Set(
+              state.instances
+                .filter(
+                  (inst) => state.selectedInstanceIds.includes(inst.instanceId) && componentHasPipeColorOption(inst.componentTypeId),
+                )
+                .map((inst) => inst.instanceId),
+            )
+          : undefined
+      return { ...pushHistory(state), ...applyStyleFieldToIds(state, kind, ids, field, value, pipeStubInstanceIds) }
     }),
 
   setGroupPipeFlag: (groupId, field, value) =>

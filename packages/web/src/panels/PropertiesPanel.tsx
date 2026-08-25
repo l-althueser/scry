@@ -21,7 +21,14 @@ import { DEFAULT_FONT_SIZE, boundsOfPoints } from '../shapes/freeShapeGeometry'
 import { loadImageFile } from '../import/loadImageFile'
 import { loadImage } from '../import/imageTransparency'
 import { estimateDataUriBytes, formatBytes } from '../import/imageResize'
-import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint, type InstanceOptionDescriptor } from '../library'
+import {
+  BOX_ROLE_FILL,
+  LABEL_ROLE_ORDER,
+  componentHasPipeColorOption,
+  getComponentType,
+  rotatePoint,
+  type InstanceOptionDescriptor,
+} from '../library'
 import { describeComposition, type CompositionCounts } from '../state/selectionDescription'
 
 /** A small "ⓘ" glyph carrying a hover tooltip (native title) — tucks a long explanation out of the way, right next to whatever it explains, instead of a permanent paragraph taking up space below it. */
@@ -185,6 +192,7 @@ function LabeledShortcutHint({ items }: { items: readonly { keys: string; word: 
 function SelectionStylePanel({
   heading,
   counts,
+  pipeStubInstanceCount,
   onStyleChange,
   onPipeFlagChange,
   actions,
@@ -193,6 +201,8 @@ function SelectionStylePanel({
 }: {
   heading: string
   counts: CompositionCounts
+  /** Selected instances whose icon has its own small pipe-connector stub (see componentHasPipeColorOption) — folded into the Pipes swatch below alongside real pipes, even when no real pipe is selected. */
+  pipeStubInstanceCount: number
   onStyleChange: (kind: 'instance' | 'pipe' | 'shape', field: 'fill' | 'stroke' | 'text', value: string | null) => void
   onPipeFlagChange: (field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   actions: { label: string; onClick: () => void; danger?: boolean }[]
@@ -215,22 +225,29 @@ function SelectionStylePanel({
         </fieldset>
       )}
 
-      {counts.pipes > 0 && (
+      {(counts.pipes > 0 || pipeStubInstanceCount > 0) && (
         <fieldset className="field roles-field">
           <legend>Pipes</legend>
-          <p className="field-hint">Applies to every selected pipe at once, as a single undo step.</p>
+          <p className="field-hint">
+            Applies to every selected pipe{pipeStubInstanceCount > 0 ? " and every selected component's own pipe stub" : ''} at
+            once, as a single undo step.
+          </p>
           <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('pipe', 'stroke', v)} />
 
-          <div className="field-row">
-            <span style={{ flex: '1 1 auto' }}>Indicator (_pipe)</span>
-            <button onClick={() => onPipeFlagChange('indicatorEnabled', true)}>Enable</button>
-            <button onClick={() => onPipeFlagChange('indicatorEnabled', false)}>Disable</button>
-          </div>
-          <div className="field-row">
-            <span style={{ flex: '1 1 auto' }}>Name label (_name)</span>
-            <button onClick={() => onPipeFlagChange('nameEnabled', true)}>Enable</button>
-            <button onClick={() => onPipeFlagChange('nameEnabled', false)}>Disable</button>
-          </div>
+          {counts.pipes > 0 && (
+            <>
+              <div className="field-row">
+                <span style={{ flex: '1 1 auto' }}>Indicator (_pipe)</span>
+                <button onClick={() => onPipeFlagChange('indicatorEnabled', true)}>Enable</button>
+                <button onClick={() => onPipeFlagChange('indicatorEnabled', false)}>Disable</button>
+              </div>
+              <div className="field-row">
+                <span style={{ flex: '1 1 auto' }}>Name label (_name)</span>
+                <button onClick={() => onPipeFlagChange('nameEnabled', true)}>Enable</button>
+                <button onClick={() => onPipeFlagChange('nameEnabled', false)}>Disable</button>
+              </div>
+            </>
+          )}
         </fieldset>
       )}
 
@@ -514,10 +531,16 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       images: group.members.filter((m) => m.kind === 'layer').length,
     }
 
+    const groupPipeStubInstanceCount = group.members
+      .filter((m) => m.kind === 'instance')
+      .map((m) => instances.find((inst) => inst.instanceId === m.id))
+      .filter((inst) => inst && componentHasPipeColorOption(inst.componentTypeId)).length
+
     return (
       <SelectionStylePanel
         heading="Group selected"
         counts={counts}
+        pipeStubInstanceCount={groupPipeStubInstanceCount}
         onStyleChange={(kind, field, value) => setGroupStyle(selectedGroupId, kind, field, value)}
         onPipeFlagChange={(field, value) => setGroupPipeFlag(selectedGroupId, field, value)}
         actions={[
@@ -551,6 +574,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           leaderLines: selectedLeaderLines.length,
           images: selectedLayerIds.length,
         }}
+        pipeStubInstanceCount={selected.filter((inst) => componentHasPipeColorOption(inst.componentTypeId)).length}
         onStyleChange={(kind, field, value) => setSelectionStyle(kind, field, value)}
         onPipeFlagChange={(field, value) => setSelectionPipeFlag(field, value)}
         actions={[

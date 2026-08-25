@@ -52,10 +52,8 @@ registerIconComponentType({
   tagPrefix: 'HX',
   category: 'Equipment',
   indicatorShapes: [{ d: HOUSING_D }],
-  outlineExtras: [
-    ...tubeShapes,
-    { d: DIAGONAL1_D },
-    { d: DIAGONAL2_D },
+  outlineExtras: [...tubeShapes, { d: DIAGONAL1_D }, { d: DIAGONAL2_D }],
+  pipeStubs: [
     ...stub(STUB_Y_TOP, true),
     ...stub(STUB_Y_BOTTOM, true),
     ...stub(STUB_Y_TOP, false),

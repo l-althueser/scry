@@ -126,6 +126,11 @@ export function listComponentTypes(): ComponentTypeDef[] {
   return Array.from(registry.values())
 }
 
+/** Whether an instance of this type has a "pipe color" option (types whose icon includes a small pipe-connector stub — see iconComponentFactory's pipeStubs) — used to fold those instances into a multi-selection's shared "Pipes" style swatch alongside real pipes. */
+export function componentHasPipeColorOption(typeId: string): boolean {
+  return getComponentType(typeId).instanceOptions?.some((o) => o.key === 'pipeColor') ?? false
+}
+
 /** Resolves a type's local body corners for a specific instance — dynamic (getLocalBodyCorners) if the type declares it, otherwise the static per-type list. */
 export function resolveLocalBodyCorners(
   def: ComponentTypeDef,
