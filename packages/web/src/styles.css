@@ -399,7 +399,9 @@ body {
 
 .field input[type='text'],
 .field input[type='number'],
-.field input:not([type]) {
+.field input:not([type]),
+.field select,
+.field textarea {
   width: 100%;
   box-sizing: border-box;
   padding: 0.25rem 0.35rem;

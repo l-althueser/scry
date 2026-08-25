@@ -13,11 +13,17 @@ import type { ComponentInstance, Port, RoleInstance } from '@svg-editor/shared'
 export interface InstanceOptionDescriptor {
   /** Key into ComponentInstance.propertyValues. */
   key: string
-  kind: 'boolean' | 'color' | 'text' | 'select'
+  kind: 'boolean' | 'color' | 'text' | 'select' | 'number'
   label: string
-  default: boolean | string
+  default: boolean | string | number
   /** Only used when kind === 'select'. */
   options?: { value: string; label: string }[]
+  /** Only used when kind === 'number'. */
+  min?: number
+  max?: number
+  step?: number
+  /** Options sharing the same row key render side-by-side in one row instead of stacked. */
+  row?: string
 }
 
 /**

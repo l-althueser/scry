@@ -40,34 +40,96 @@ const LINE_HEIGHT = FONT_SIZE * 1.2
 /** Rough average glyph width for this font/size — same estimation approach FreeShape text hit-boxes use, good enough to size a box (not to lay out exact glyph positions). */
 const APPROX_CHAR_WIDTH = FONT_SIZE * 0.62
 
+type BoxTextAlign = 'left' | 'center' | 'right'
+/** Rotation of the box's inline text, in degrees (any value — the four cardinal directions 0/90/180/270 are the intended presets, entered via a plain number field rather than a fixed enum). */
+type BoxTextOrientation = number
+
 function boxText(instance: ComponentInstance): string {
   const raw = instance.propertyValues.text
   return typeof raw === 'string' ? raw : ''
+}
+
+/** Alignment along the text's own reading direction — for a 90°/270°-rotated box (see boxTextOrientation/isVerticalOrientation) this reads along the rotated axis, so 'left'/'right' land at whichever visual edge the rotation puts them on. */
+function boxTextAlign(instance: ComponentInstance): BoxTextAlign {
+  const raw = instance.propertyValues.textAlign
+  return raw === 'left' || raw === 'right' ? raw : 'center'
+}
+
+function boxTextOrientation(instance: ComponentInstance): BoxTextOrientation {
+  const raw = instance.propertyValues.textOrientation
+  return typeof raw === 'number' && Number.isFinite(raw) ? ((raw % 360) + 360) % 360 : 0
+}
+
+/** Which cardinal quadrant an arbitrary rotation angle falls closest to — box-fit sizing and text layout only swap axes at the 90°/270° cardinal directions, not continuously. */
+function isVerticalOrientation(angleDeg: BoxTextOrientation): boolean {
+  const bucket = Math.round(angleDeg / 90) % 4
+  return bucket === 1 || bucket === 3
 }
 
 function textLines(text: string): string[] {
   return text.split('\n')
 }
 
-/** The box's own text-driven floor (local, unrotated, top-left anchored at the instance origin) — grows to fit the "text" property, never shrinks below the original fixed size. */
-function computeBoxSize(text: string): { width: number; height: number } {
+/** The box's own text-driven floor (local, unrotated, top-left anchored at the instance origin) — grows to fit the "text" property, never shrinks below the original fixed size. A 90°/270° orientation swaps which axis the text's line-length vs. line-count grows: a long vertical line needs a taller box, not a wider one. */
+function computeBoxSize(text: string, orientation: BoxTextOrientation): { width: number; height: number } {
   const trimmed = text.trim()
   if (!trimmed) return { width: MIN_WIDTH, height: MIN_HEIGHT }
   const lines = textLines(text)
   const longest = Math.max(...lines.map((l) => l.length), 1)
-  const width = Math.max(MIN_WIDTH, longest * APPROX_CHAR_WIDTH + TEXT_PADDING_X * 2)
-  const height = Math.max(MIN_HEIGHT, lines.length * LINE_HEIGHT + TEXT_PADDING_Y * 2)
-  return { width, height }
+  const runLength = longest * APPROX_CHAR_WIDTH + TEXT_PADDING_X * 2
+  const crossThickness = lines.length * LINE_HEIGHT + TEXT_PADDING_Y * 2
+  return isVerticalOrientation(orientation)
+    ? { width: Math.max(MIN_WIDTH, crossThickness), height: Math.max(MIN_HEIGHT, runLength) }
+    : { width: Math.max(MIN_WIDTH, runLength), height: Math.max(MIN_HEIGHT, crossThickness) }
 }
 
 /** The box's actual rendered size: the text-driven floor, or a larger manual override from corner-drag resizing (SvgCanvas's resize-instance handles) — never smaller than what the current text needs. */
 function effectiveBoxSize(instance: ComponentInstance): { width: number; height: number } {
-  const min = computeBoxSize(boxText(instance))
+  const min = computeBoxSize(boxText(instance), boxTextOrientation(instance))
   const w = instance.propertyValues.width
   const h = instance.propertyValues.height
   return {
     width: Math.max(min.width, typeof w === 'number' ? w : 0),
     height: Math.max(min.height, typeof h === 'number' ? h : 0),
+  }
+}
+
+/**
+ * Lays out the box's own inline text (align/orientation-aware) once, shared
+ * by both the live canvas (renderBoxTextInto) and export (exportInstance) so
+ * they can never drift apart. A non-zero orientation is a single rotate()
+ * around the box's own center: at the 90°/270° cardinals the tspans are
+ * positioned as if the box were `layoutWidth × height` (width/height
+ * swapped) and centered at the box's real center, so rotating that block
+ * back around the same center lands it correctly within the real (unswapped)
+ * box — same technique a paper label printed sideways uses. Off-cardinal
+ * angles reuse the nearest cardinal's layout and just rotate it further.
+ */
+function computeBoxTextLayout(
+  text: string,
+  width: number,
+  height: number,
+  align: BoxTextAlign,
+  orientation: BoxTextOrientation,
+): { anchor: 'start' | 'middle' | 'end'; transform: string | null; tspans: { x: number; y: number; text: string }[] } {
+  const lines = textLines(text)
+  const vertical = isVerticalOrientation(orientation)
+  const layoutWidth = vertical ? height : width
+  const centerX = width / 2
+  const centerY = height / 2
+  const totalTextHeight = lines.length * LINE_HEIGHT
+  const firstBaselineY = centerY - totalTextHeight / 2 + LINE_HEIGHT * 0.8
+  const anchor: 'start' | 'middle' | 'end' = align === 'left' ? 'start' : align === 'right' ? 'end' : 'middle'
+  const alignX =
+    align === 'left'
+      ? centerX - layoutWidth / 2 + TEXT_PADDING_X
+      : align === 'right'
+        ? centerX + layoutWidth / 2 - TEXT_PADDING_X
+        : centerX
+  return {
+    anchor,
+    transform: orientation !== 0 ? `rotate(${fmt(-orientation)} ${fmt(centerX)} ${fmt(centerY)})` : null,
+    tspans: lines.map((line, i) => ({ x: alignX, y: firstBaselineY + i * LINE_HEIGHT, text: line })),
   }
 }
 
@@ -387,19 +449,27 @@ function render(group: SVGGElement) {
   group.appendChild(createLabelBoxElement('setpoint'))
 }
 
-/** Rebuilds the box text's <tspan>s to the current instance text — same multi-line/centered approach as FreeShape text (see shapes/freeShapeGeometry.ts). */
-function renderBoxTextInto(el: SVGTextElement, text: string, width: number, height: number) {
+/** Rebuilds the box text's <tspan>s to the current instance text/align/orientation — see computeBoxTextLayout. */
+function renderBoxTextInto(
+  el: SVGTextElement,
+  text: string,
+  width: number,
+  height: number,
+  align: BoxTextAlign,
+  orientation: BoxTextOrientation,
+) {
   while (el.firstChild) el.removeChild(el.firstChild)
-  const lines = textLines(text)
-  const totalHeight = lines.length * LINE_HEIGHT
-  const firstBaselineY = height / 2 - totalHeight / 2 + LINE_HEIGHT * 0.8
-  lines.forEach((line, i) => {
-    const tspan = document.createElementNS(SVG_NS, 'tspan')
-    tspan.setAttribute('x', String(width / 2))
-    tspan.setAttribute('y', String(firstBaselineY + i * LINE_HEIGHT))
-    tspan.textContent = line
-    el.appendChild(tspan)
-  })
+  const layout = computeBoxTextLayout(text, width, height, align, orientation)
+  el.setAttribute('text-anchor', layout.anchor)
+  if (layout.transform) el.setAttribute('transform', layout.transform)
+  else el.removeAttribute('transform')
+  for (const tspan of layout.tspans) {
+    const tspanEl = document.createElementNS(SVG_NS, 'tspan')
+    tspanEl.setAttribute('x', String(tspan.x))
+    tspanEl.setAttribute('y', String(tspan.y))
+    tspanEl.textContent = tspan.text
+    el.appendChild(tspanEl)
+  }
 }
 
 function update(group: SVGGElement, instance: ComponentInstance) {
@@ -420,7 +490,7 @@ function update(group: SVGGElement, instance: ComponentInstance) {
   }
 
   const boxTextEl = group.querySelector<SVGTextElement>('.gv-eqbox-text')
-  if (boxTextEl) renderBoxTextInto(boxTextEl, text, width, height)
+  if (boxTextEl) renderBoxTextInto(boxTextEl, text, width, height, boxTextAlign(instance), boxTextOrientation(instance))
 
   const cylinderLid = group.querySelector<SVGPathElement>('.gv-eqbox-cylinder-lid')
   if (cylinderLid) {
@@ -485,17 +555,14 @@ function exportInstance(instance: ComponentInstance): string[] {
     lines.push(`      <path d="${cylinderLidD(width, height)}" fill="none" stroke="#000000" stroke-width="1.5" />`)
   }
   if (text.trim()) {
-    const bodyLines = textLines(text)
-    const totalHeight = bodyLines.length * LINE_HEIGHT
-    const firstBaselineY = height / 2 - totalHeight / 2 + LINE_HEIGHT * 0.8
+    const layout = computeBoxTextLayout(text, width, height, boxTextAlign(instance), boxTextOrientation(instance))
+    const transformAttr = layout.transform ? ` transform="${layout.transform}"` : ''
     lines.push(
-      `      <text x="${fmt(width / 2)}" text-anchor="middle" font-family="Arial" font-size="${FONT_SIZE}" fill="#000000">`,
+      `      <text text-anchor="${layout.anchor}" font-family="Arial" font-size="${FONT_SIZE}" fill="#000000"${transformAttr}>`,
     )
-    bodyLines.forEach((line, i) => {
-      lines.push(
-        `        <tspan x="${fmt(width / 2)}" y="${fmt(firstBaselineY + i * LINE_HEIGHT)}">${escapeXml(line)}</tspan>`,
-      )
-    })
+    for (const tspan of layout.tspans) {
+      lines.push(`        <tspan x="${fmt(tspan.x)}" y="${fmt(tspan.y)}">${escapeXml(tspan.text)}</tspan>`)
+    }
     lines.push(`      </text>`)
   }
   lines.push(`    </g>`)
@@ -533,7 +600,29 @@ function exportInstance(instance: ComponentInstance): string[] {
 
 const instanceOptions: InstanceOptionDescriptor[] = [
   { key: 'fillColor', kind: 'color', label: 'Fill color', default: '#e5e7eb' },
-  { key: 'text', kind: 'text', label: 'Box text (centered, grows the box to fit)', default: '' },
+  { key: 'text', kind: 'text', label: 'Box text (grows the box to fit)', default: '' },
+  {
+    key: 'textAlign',
+    kind: 'select',
+    label: 'Alignment',
+    default: 'center',
+    row: 'text-layout',
+    options: [
+      { value: 'left', label: 'Left' },
+      { value: 'center', label: 'Center' },
+      { value: 'right', label: 'Right' },
+    ],
+  },
+  {
+    key: 'textOrientation',
+    kind: 'number',
+    label: 'Orientation (°)',
+    default: 0,
+    row: 'text-layout',
+    min: 0,
+    max: 359,
+    step: 90,
+  },
   {
     key: 'shape',
     kind: 'select',
@@ -575,7 +664,7 @@ registerComponentType({
     return computePorts(width, height)
   },
   resizable: {
-    minSize: (instance) => computeBoxSize(boxText(instance)),
+    minSize: (instance) => computeBoxSize(boxText(instance), boxTextOrientation(instance)),
     widthKey: 'width',
     heightKey: 'height',
   },

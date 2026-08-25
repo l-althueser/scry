@@ -21,7 +21,7 @@ import { DEFAULT_FONT_SIZE, boundsOfPoints } from '../shapes/freeShapeGeometry'
 import { loadImageFile } from '../import/loadImageFile'
 import { loadImage } from '../import/imageTransparency'
 import { estimateDataUriBytes, formatBytes } from '../import/imageResize'
-import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint } from '../library'
+import { BOX_ROLE_FILL, LABEL_ROLE_ORDER, getComponentType, rotatePoint, type InstanceOptionDescriptor } from '../library'
 import { describeComposition, type CompositionCounts } from '../state/selectionDescription'
 
 /** A small "ⓘ" glyph carrying a hover tooltip (native title) — tucks a long explanation out of the way, right next to whatever it explains, instead of a permanent paragraph taking up space below it. */
@@ -1789,66 +1789,94 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       {(() => {
         const options = getComponentType(instance.componentTypeId).instanceOptions
         if (!options || options.length === 0) return null
+        const renderOption = (opt: InstanceOptionDescriptor) => {
+          const raw = instance.propertyValues[opt.key]
+          if (opt.kind === 'boolean') {
+            const checked = typeof raw === 'boolean' ? raw : (opt.default as boolean)
+            return (
+              <label key={opt.key} className="role-checkbox">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.checked)}
+                />
+                {opt.label}
+              </label>
+            )
+          }
+          if (opt.kind === 'text') {
+            const text = typeof raw === 'string' ? raw : (opt.default as string)
+            return (
+              <label key={opt.key} className="field">
+                <span>{opt.label}</span>
+                <textarea
+                  rows={3}
+                  value={text}
+                  onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
+                />
+              </label>
+            )
+          }
+          if (opt.kind === 'number') {
+            const num = typeof raw === 'number' ? raw : (opt.default as number)
+            return (
+              <label key={opt.key} className="field">
+                <span>{opt.label}</span>
+                <input
+                  type="number"
+                  value={num}
+                  min={opt.min}
+                  max={opt.max}
+                  step={opt.step}
+                  onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, Number(e.target.value))}
+                />
+              </label>
+            )
+          }
+          if (opt.kind === 'select') {
+            const value = typeof raw === 'string' ? raw : (opt.default as string)
+            return (
+              <label key={opt.key} className="field">
+                <span>{opt.label}</span>
+                <select value={value} onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}>
+                  {opt.options?.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )
+          }
+          const color = typeof raw === 'string' && raw ? raw : (opt.default as string)
+          return (
+            <ColorPickerRow
+              key={opt.key}
+              label={opt.label}
+              value={typeof raw === 'string' && raw ? raw : null}
+              defaultValue={color}
+              onChange={(v) => setInstancePropertyValue(instance.instanceId, opt.key, v)}
+            />
+          )
+        }
+        const rows: InstanceOptionDescriptor[][] = []
+        for (const opt of options) {
+          const last = rows[rows.length - 1]
+          if (opt.row && last && last[0]?.row === opt.row) last.push(opt)
+          else rows.push([opt])
+        }
         return (
           <fieldset className="field roles-field">
             <legend>Options</legend>
-            {options.map((opt) => {
-              const raw = instance.propertyValues[opt.key]
-              if (opt.kind === 'boolean') {
-                const checked = typeof raw === 'boolean' ? raw : (opt.default as boolean)
-                return (
-                  <label key={opt.key} className="role-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.checked)}
-                    />
-                    {opt.label}
-                  </label>
-                )
-              }
-              if (opt.kind === 'text') {
-                const text = typeof raw === 'string' ? raw : (opt.default as string)
-                return (
-                  <label key={opt.key} className="field">
-                    <span>{opt.label}</span>
-                    <textarea
-                      rows={3}
-                      value={text}
-                      onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
-                    />
-                  </label>
-                )
-              }
-              if (opt.kind === 'select') {
-                const value = typeof raw === 'string' ? raw : (opt.default as string)
-                return (
-                  <label key={opt.key} className="field">
-                    <span>{opt.label}</span>
-                    <select
-                      value={value}
-                      onChange={(e) => setInstancePropertyValue(instance.instanceId, opt.key, e.target.value)}
-                    >
-                      {opt.options?.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )
-              }
-              const color = typeof raw === 'string' && raw ? raw : (opt.default as string)
-              return (
-                <ColorPickerRow
-                  key={opt.key}
-                  label={opt.label}
-                  value={typeof raw === 'string' && raw ? raw : null}
-                  defaultValue={color}
-                  onChange={(v) => setInstancePropertyValue(instance.instanceId, opt.key, v)}
-                />
-              )
-            })}
+            {rows.map((group) =>
+              group.length > 1 ? (
+                <div className="field-row" key={group.map((o) => o.key).join('+')}>
+                  {group.map(renderOption)}
+                </div>
+              ) : (
+                renderOption(group[0])
+              ),
+            )}
           </fieldset>
         )
       })()}
