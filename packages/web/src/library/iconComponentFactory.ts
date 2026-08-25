@@ -269,10 +269,14 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     // Pipe-connector stubs get their own group (fill:none like the outline
     // extras, so only the stroke shows) with the stroke color set per
     // instance in update() — see pipeStubColor — instead of the hardcoded
-    // black every other outline extra uses.
+    // black every other outline extra uses. Defaulted here too (update()
+    // overrides it for every real instance) so a context that never calls
+    // update() — the toolbar palette's preview icon — still shows the stub
+    // instead of an invisible (default SVG stroke: none) line.
     const pipeStubGroup = document.createElementNS(SVG_NS, 'g')
     pipeStubGroup.setAttribute('class', 'gv-pipe-stub')
     pipeStubGroup.setAttribute('fill', 'none')
+    pipeStubGroup.setAttribute('stroke', PIPE_DEFAULT_COLOR)
     for (const shape of pipeStubs) {
       const path = document.createElementNS(SVG_NS, 'path')
       path.setAttribute('d', shape.d)
