@@ -42,21 +42,24 @@ function InfoIcon({ text }: { text: string }) {
   )
 }
 
-/** One color field, same single-line layout everywhere it's used: label + swatch + None + Default. `value` null/undefined means "at default". `hint`, if given, becomes an InfoIcon next to the label instead of a separate paragraph. */
+/** One color field, same single-line layout everywhere it's used: label + swatch + None + Default. `value` null/undefined means "at default". `hint`, if given, becomes an InfoIcon next to the label instead of a separate paragraph. `resettable`, if given, overrides whether "Default" is clickable (defaults to `value != null`) — needed for a multi-selection swatch where `value` is deliberately null to show the placeholder color (the selected elements' colors differ) even though at least one of them still has an override to clear. */
 function ColorPickerRow({
   label,
   value,
   defaultValue,
   onChange,
   hint,
+  resettable,
 }: {
   label: string
   value: string | null | undefined
   defaultValue: string
   onChange: (value: string | null) => void
   hint?: string
+  resettable?: boolean
 }) {
   const isTransparent = value === 'transparent'
+  const canReset = resettable ?? value != null
   return (
     <div className="field-row color-row">
       <span className="color-row-label">
@@ -73,11 +76,22 @@ function ColorPickerRow({
       <button onClick={() => onChange('transparent')} disabled={isTransparent}>
         None
       </button>
-      <button onClick={() => onChange(null)} disabled={value == null}>
+      <button onClick={() => onChange(null)} disabled={!canReset}>
         Default
       </button>
     </div>
   )
+}
+
+type ColorFieldSummary = { value: string | null; resettable: boolean }
+
+/** Summarizes one color field across a multi-selection: `value` is the shared value when every item agrees (including every item being unset/null, i.e. "all at default"), or null when they differ — the swatch then falls back to showing the fieldset's own placeholder color instead of picking one item's value arbitrarily. `resettable` is true whenever at least one item has a non-null override, regardless of whether they agree, so "Default" stays clickable to clear a mixed selection down to all-default in one click. */
+function summarizeColorValues(values: (string | null | undefined)[]): ColorFieldSummary {
+  if (values.length === 0) return { value: null, resettable: false }
+  const normalized = values.map((v) => v ?? null)
+  const resettable = normalized.some((v) => v !== null)
+  const allSame = normalized.every((v) => v === normalized[0])
+  return { value: allSame ? normalized[0] : null, resettable }
 }
 
 /**
@@ -195,6 +209,9 @@ function SelectionStylePanel({
   heading,
   counts,
   pipeStubInstanceCount,
+  instanceColorSummary,
+  pipeColorSummary,
+  shapeColorSummary,
   onStyleChange,
   onPipeFlagChange,
   actions,
@@ -205,6 +222,10 @@ function SelectionStylePanel({
   counts: CompositionCounts
   /** Selected instances whose icon has its own small pipe-connector stub (see componentHasPipeColorOption) — folded into the Pipes swatch below alongside real pipes, even when no real pipe is selected. */
   pipeStubInstanceCount: number
+  /** Per-field summaries (see summarizeColorValues) across every selected label role, so each swatch shows the shared color when they agree, the placeholder when they don't, and only offers "Default" when at least one is actually overridden. */
+  instanceColorSummary: { fill: ColorFieldSummary; stroke: ColorFieldSummary; text: ColorFieldSummary }
+  pipeColorSummary: ColorFieldSummary
+  shapeColorSummary: { fill: ColorFieldSummary; stroke: ColorFieldSummary }
   onStyleChange: (kind: 'instance' | 'pipe' | 'shape', field: 'fill' | 'stroke' | 'text', value: string | null) => void
   onPipeFlagChange: (field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   actions: { label: string; onClick: () => void; danger?: boolean }[]
@@ -221,9 +242,27 @@ function SelectionStylePanel({
         <fieldset className="field roles-field">
           <legend>Labels</legend>
           <p className="field-hint">Applies to every label on every selected instance at once, as a single undo step.</p>
-          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('instance', 'fill', v)} />
-          <ColorPickerRow label="Border" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('instance', 'stroke', v)} />
-          <ColorPickerRow label="Text" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('instance', 'text', v)} />
+          <ColorPickerRow
+            label="Fill"
+            value={instanceColorSummary.fill.value}
+            resettable={instanceColorSummary.fill.resettable}
+            defaultValue="#ffffff"
+            onChange={(v) => onStyleChange('instance', 'fill', v)}
+          />
+          <ColorPickerRow
+            label="Border"
+            value={instanceColorSummary.stroke.value}
+            resettable={instanceColorSummary.stroke.resettable}
+            defaultValue="#000000"
+            onChange={(v) => onStyleChange('instance', 'stroke', v)}
+          />
+          <ColorPickerRow
+            label="Text"
+            value={instanceColorSummary.text.value}
+            resettable={instanceColorSummary.text.resettable}
+            defaultValue="#000000"
+            onChange={(v) => onStyleChange('instance', 'text', v)}
+          />
         </fieldset>
       )}
 
@@ -234,7 +273,13 @@ function SelectionStylePanel({
             Applies to every selected pipe{pipeStubInstanceCount > 0 ? " and every selected component's own pipe stub" : ''} at
             once, as a single undo step.
           </p>
-          <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('pipe', 'stroke', v)} />
+          <ColorPickerRow
+            label="Line"
+            value={pipeColorSummary.value}
+            resettable={pipeColorSummary.resettable}
+            defaultValue="#000000"
+            onChange={(v) => onStyleChange('pipe', 'stroke', v)}
+          />
 
           {counts.pipes > 0 && (
             <>
@@ -257,8 +302,20 @@ function SelectionStylePanel({
         <fieldset className="field roles-field">
           <legend>Shapes</legend>
           <p className="field-hint">Applies to every selected shape at once, as a single undo step.</p>
-          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('shape', 'fill', v)} />
-          <ColorPickerRow label="Stroke" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('shape', 'stroke', v)} />
+          <ColorPickerRow
+            label="Fill"
+            value={shapeColorSummary.fill.value}
+            resettable={shapeColorSummary.fill.resettable}
+            defaultValue="#ffffff"
+            onChange={(v) => onStyleChange('shape', 'fill', v)}
+          />
+          <ColorPickerRow
+            label="Stroke"
+            value={shapeColorSummary.stroke.value}
+            resettable={shapeColorSummary.stroke.resettable}
+            defaultValue="#000000"
+            onChange={(v) => onStyleChange('shape', 'stroke', v)}
+          />
         </fieldset>
       )}
 
@@ -533,16 +590,41 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       images: group.members.filter((m) => m.kind === 'layer').length,
     }
 
-    const groupPipeStubInstanceCount = group.members
+    const groupInstances = group.members
       .filter((m) => m.kind === 'instance')
       .map((m) => instances.find((inst) => inst.instanceId === m.id))
-      .filter((inst) => inst && componentHasPipeColorOption(inst.componentTypeId)).length
+      .filter((inst): inst is (typeof instances)[number] => !!inst)
+    const groupPipeStubInstances = groupInstances.filter((inst) => componentHasPipeColorOption(inst.componentTypeId))
+    const groupPipes = group.members
+      .filter((m) => m.kind === 'pipe')
+      .map((m) => pipes.find((p) => p.instanceId === m.id))
+      .filter((p): p is (typeof pipes)[number] => !!p)
+    const groupShapes = group.members
+      .filter((m) => m.kind === 'shape')
+      .map((m) => freeShapes.find((s) => s.instanceId === m.id))
+      .filter((s): s is (typeof freeShapes)[number] => !!s)
+    const groupLabelRoles = groupInstances.flatMap((inst) => inst.roles.filter((r) => r.role !== 'indicator'))
 
     return (
       <SelectionStylePanel
         heading="Group selected"
         counts={counts}
-        pipeStubInstanceCount={groupPipeStubInstanceCount}
+        pipeStubInstanceCount={groupPipeStubInstances.length}
+        instanceColorSummary={{
+          fill: summarizeColorValues(groupLabelRoles.map((r) => r.fillColor)),
+          stroke: summarizeColorValues(groupLabelRoles.map((r) => r.strokeColor)),
+          text: summarizeColorValues(groupLabelRoles.map((r) => r.textColor)),
+        }}
+        pipeColorSummary={summarizeColorValues([
+          ...groupPipes.map((p) => p.strokeColor),
+          ...groupPipeStubInstances.map((inst) =>
+            typeof inst.propertyValues.pipeColor === 'string' ? inst.propertyValues.pipeColor : null,
+          ),
+        ])}
+        shapeColorSummary={{
+          fill: summarizeColorValues(groupShapes.map((s) => s.style.fill)),
+          stroke: summarizeColorValues(groupShapes.map((s) => s.style.stroke)),
+        }}
         onStyleChange={(kind, field, value) => setGroupStyle(selectedGroupId, kind, field, value)}
         onPipeFlagChange={(field, value) => setGroupPipeFlag(selectedGroupId, field, value)}
         actions={[
@@ -566,6 +648,8 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const totalSelected =
     selected.length + selectedPipes.length + selectedShapes.length + selectedLeaderLines.length + selectedLayerIds.length
   if (totalSelected > 1) {
+    const selectedPipeStubInstances = selected.filter((inst) => componentHasPipeColorOption(inst.componentTypeId))
+    const selectedLabelRoles = selected.flatMap((inst) => inst.roles.filter((r) => r.role !== 'indicator'))
     return (
       <SelectionStylePanel
         heading={`${totalSelected} selected`}
@@ -576,7 +660,22 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           leaderLines: selectedLeaderLines.length,
           images: selectedLayerIds.length,
         }}
-        pipeStubInstanceCount={selected.filter((inst) => componentHasPipeColorOption(inst.componentTypeId)).length}
+        pipeStubInstanceCount={selectedPipeStubInstances.length}
+        instanceColorSummary={{
+          fill: summarizeColorValues(selectedLabelRoles.map((r) => r.fillColor)),
+          stroke: summarizeColorValues(selectedLabelRoles.map((r) => r.strokeColor)),
+          text: summarizeColorValues(selectedLabelRoles.map((r) => r.textColor)),
+        }}
+        pipeColorSummary={summarizeColorValues([
+          ...selectedPipes.map((p) => p.strokeColor),
+          ...selectedPipeStubInstances.map((inst) =>
+            typeof inst.propertyValues.pipeColor === 'string' ? inst.propertyValues.pipeColor : null,
+          ),
+        ])}
+        shapeColorSummary={{
+          fill: summarizeColorValues(selectedShapes.map((s) => s.style.fill)),
+          stroke: summarizeColorValues(selectedShapes.map((s) => s.style.stroke)),
+        }}
         onStyleChange={(kind, field, value) => setSelectionStyle(kind, field, value)}
         onPipeFlagChange={(field, value) => setSelectionPipeFlag(field, value)}
         actions={[
