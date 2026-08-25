@@ -554,43 +554,53 @@ function cloneEntitySet(source: ScryClipboardPayload, offset: Point): ScryClipbo
 }
 
 /**
- * Core of setGroupStyle/setSelectionStyle: fans a shared color-field change
- * out to whichever member kinds actually have that field — instances fan it
- * to every one of their roles (there's no instance-level color, only
- * per-role — see RoleInstance), pipes only have a stroke (strokeColor),
- * shapes have both fill and stroke but no text color, and leader lines have
- * no style fields at all so they're silently unaffected by any field.
- * Shared between the persisted-group and loose-multi-select editors so both
+ * Core of setGroupStyle/setSelectionStyle: applies a color-field change to
+ * ONE kind only (instances' role labels, pipes' line color, or shapes' own
+ * fill/stroke) — `kind` comes from which per-kind fieldset (Labels/Pipes/
+ * Shapes) the panel's swatch was clicked in (see SelectionStylePanel), so
+ * e.g. recoloring pipes' lines never bleeds into instance label borders just
+ * because both happen to use the same 'stroke' field name. Leader lines have
+ * no style fields at all so they're never a valid `kind` here. Shared
+ * between the persisted-group and loose-multi-select editors so both
  * broadcast identically.
  */
 function applyStyleFieldToIds(
   state: Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes'>,
-  ids: { instanceIds: Set<string>; pipeIds: Set<string>; shapeIds: Set<string> },
+  kind: 'instance' | 'pipe' | 'shape',
+  ids: Set<string>,
   field: 'fill' | 'stroke' | 'text',
   value: string | null,
 ): Pick<ProjectState, 'instances' | 'pipes' | 'freeShapes'> {
-  const roleKey = field === 'fill' ? 'fillColor' : field === 'stroke' ? 'strokeColor' : 'textColor'
+  if (kind === 'instance') {
+    const roleKey = field === 'fill' ? 'fillColor' : field === 'stroke' ? 'strokeColor' : 'textColor'
+    return {
+      instances: state.instances.map((inst) =>
+        ids.has(inst.instanceId) ? { ...inst, roles: inst.roles.map((r) => ({ ...r, [roleKey]: value })) } : inst,
+      ),
+      pipes: state.pipes,
+      freeShapes: state.freeShapes,
+    }
+  }
+  if (kind === 'pipe') {
+    // Expanded to volume siblings, same as setPipeColor — a connected run's
+    // color is one shared thing, not per-segment. Pipes only ever have a
+    // stroke (their line color) — fill/text are meaningless and no-op.
+    if (field !== 'stroke') return { instances: state.instances, pipes: state.pipes, freeShapes: state.freeShapes }
+    const expanded = expandToVolumeSiblings(state.pipes, ids)
+    return {
+      instances: state.instances,
+      pipes: state.pipes.map((p) => (expanded.has(p.instanceId) ? { ...p, strokeColor: value } : p)),
+      freeShapes: state.freeShapes,
+    }
+  }
+  // kind === 'shape': fill and stroke apply, text is meaningless (no per-shape text color) and no-ops.
+  if (field !== 'fill' && field !== 'stroke') {
+    return { instances: state.instances, pipes: state.pipes, freeShapes: state.freeShapes }
+  }
   return {
-    instances: state.instances.map((inst) =>
-      ids.instanceIds.has(inst.instanceId)
-        ? { ...inst, roles: inst.roles.map((r) => ({ ...r, [roleKey]: value })) }
-        : inst,
-    ),
-    pipes:
-      field === 'stroke'
-        ? (() => {
-            // Expanded to volume siblings, same as setPipeColor — a
-            // connected run's color is one shared thing, not per-segment.
-            const expanded = expandToVolumeSiblings(state.pipes, ids.pipeIds)
-            return state.pipes.map((p) => (expanded.has(p.instanceId) ? { ...p, strokeColor: value } : p))
-          })()
-        : state.pipes,
-    freeShapes:
-      field === 'fill' || field === 'stroke'
-        ? state.freeShapes.map((s) =>
-            ids.shapeIds.has(s.instanceId) ? { ...s, style: { ...s.style, [field]: value } } : s,
-          )
-        : state.freeShapes,
+    instances: state.instances,
+    pipes: state.pipes,
+    freeShapes: state.freeShapes.map((s) => (ids.has(s.instanceId) ? { ...s, style: { ...s.style, [field]: value } } : s)),
   }
 }
 
@@ -964,9 +974,15 @@ interface ProjectState {
   /** Deletes every member of the group plus the Group record itself, atomically (one undo step). */
   deleteGroup: (groupId: string) => void
   /** Fans a shared color-field change out to every member of a matching kind, one undo step for the whole group. */
-  setGroupStyle: (groupId: string, field: 'fill' | 'stroke' | 'text', value: string | null) => void
-  /** Same broadcast as setGroupStyle, but for whatever is currently selected across the four arrays — no persisted Group required. */
-  setSelectionStyle: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  /** kind selects which member kind's ids the field/value applies to (instance/pipe/shape) — see applyStyleFieldToIds. */
+  setGroupStyle: (
+    groupId: string,
+    kind: 'instance' | 'pipe' | 'shape',
+    field: 'fill' | 'stroke' | 'text',
+    value: string | null,
+  ) => void
+  /** Same broadcast as setGroupStyle, but for whatever is currently selected across the five arrays — no persisted Group required. */
+  setSelectionStyle: (kind: 'instance' | 'pipe' | 'shape', field: 'fill' | 'stroke' | 'text', value: string | null) => void
   /** Bulk-sets indicatorEnabled/nameEnabled across every pipe in a persisted Group at once, one undo step. */
   setGroupPipeFlag: (groupId: string, field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   /** Same bulk toggle as setGroupPipeFlag, but for every currently-selected pipe (loose multi-select). */
@@ -2468,14 +2484,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * `pushHistory` call regardless of how many members change, so a
    * group-wide color edit is a single undo step.
    */
-  setGroupStyle: (groupId, field, value) =>
+  setGroupStyle: (groupId, kind, field, value) =>
     set((state) => {
       const group = state.groups.find((g) => g.groupId === groupId)
       if (!group) return {}
-      const instanceIds = new Set(group.members.filter((m) => m.kind === 'instance').map((m) => m.id))
-      const pipeIds = new Set(group.members.filter((m) => m.kind === 'pipe').map((m) => m.id))
-      const shapeIds = new Set(group.members.filter((m) => m.kind === 'shape').map((m) => m.id))
-      return { ...pushHistory(state), ...applyStyleFieldToIds(state, { instanceIds, pipeIds, shapeIds }, field, value) }
+      const ids = new Set(group.members.filter((m) => m.kind === kind).map((m) => m.id))
+      return { ...pushHistory(state), ...applyStyleFieldToIds(state, kind, ids, field, value) }
     }),
 
   /**
@@ -2485,20 +2499,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * the same shared-style editing for "2+ things selected" regardless of
    * whether they've been formally grouped yet.
    */
-  setSelectionStyle: (field, value) =>
-    set((state) => ({
-      ...pushHistory(state),
-      ...applyStyleFieldToIds(
-        state,
-        {
-          instanceIds: new Set(state.selectedInstanceIds),
-          pipeIds: new Set(state.selectedPipeIds),
-          shapeIds: new Set(state.selectedShapeIds),
-        },
-        field,
-        value,
-      ),
-    })),
+  setSelectionStyle: (kind, field, value) =>
+    set((state) => {
+      const ids =
+        kind === 'instance'
+          ? new Set(state.selectedInstanceIds)
+          : kind === 'pipe'
+            ? new Set(state.selectedPipeIds)
+            : new Set(state.selectedShapeIds)
+      return { ...pushHistory(state), ...applyStyleFieldToIds(state, kind, ids, field, value) }
+    }),
 
   setGroupPipeFlag: (groupId, field, value) =>
     set((state) => {

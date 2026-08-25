@@ -194,7 +194,7 @@ function SelectionStylePanel({
 }: {
   heading: string
   counts: CompositionCounts
-  onStyleChange: (field: 'fill' | 'stroke' | 'text', value: string | null) => void
+  onStyleChange: (kind: 'instance' | 'pipe' | 'shape', field: 'fill' | 'stroke' | 'text', value: string | null) => void
   onPipeFlagChange: (field: 'indicatorEnabled' | 'nameEnabled', value: boolean) => void
   actions: { label: string; onClick: () => void; danger?: boolean }[]
   /** Plain-text note for anything that isn't a pure keyboard shortcut (e.g. "double-click a member to edit it individually") — shown above the badge row. */
@@ -210,9 +210,9 @@ function SelectionStylePanel({
         <fieldset className="field roles-field">
           <legend>Labels</legend>
           <p className="field-hint">Applies to every label on every selected instance at once, as a single undo step.</p>
-          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('fill', v)} />
-          <ColorPickerRow label="Border" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
-          <ColorPickerRow label="Text" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('text', v)} />
+          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('instance', 'fill', v)} />
+          <ColorPickerRow label="Border" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('instance', 'stroke', v)} />
+          <ColorPickerRow label="Text" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('instance', 'text', v)} />
         </fieldset>
       )}
 
@@ -220,7 +220,7 @@ function SelectionStylePanel({
         <fieldset className="field roles-field">
           <legend>Pipes</legend>
           <p className="field-hint">Applies to every selected pipe at once, as a single undo step.</p>
-          <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
+          <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('pipe', 'stroke', v)} />
 
           <div className="field-row">
             <span style={{ flex: '1 1 auto' }}>Indicator (_indicator)</span>
@@ -239,8 +239,8 @@ function SelectionStylePanel({
         <fieldset className="field roles-field">
           <legend>Shapes</legend>
           <p className="field-hint">Applies to every selected shape at once, as a single undo step.</p>
-          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('fill', v)} />
-          <ColorPickerRow label="Stroke" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('stroke', v)} />
+          <ColorPickerRow label="Fill" value={null} defaultValue="#ffffff" onChange={(v) => onStyleChange('shape', 'fill', v)} />
+          <ColorPickerRow label="Stroke" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('shape', 'stroke', v)} />
         </fieldset>
       )}
 
@@ -518,7 +518,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
       <SelectionStylePanel
         heading="Group selected"
         counts={counts}
-        onStyleChange={(field, value) => setGroupStyle(selectedGroupId, field, value)}
+        onStyleChange={(kind, field, value) => setGroupStyle(selectedGroupId, kind, field, value)}
         onPipeFlagChange={(field, value) => setGroupPipeFlag(selectedGroupId, field, value)}
         actions={[
           { label: 'Duplicate', onClick: () => duplicateSelection() },
@@ -551,7 +551,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           leaderLines: selectedLeaderLines.length,
           images: selectedLayerIds.length,
         }}
-        onStyleChange={(field, value) => setSelectionStyle(field, value)}
+        onStyleChange={(kind, field, value) => setSelectionStyle(kind, field, value)}
         onPipeFlagChange={(field, value) => setSelectionPipeFlag(field, value)}
         actions={[
           { label: 'Duplicate', onClick: () => duplicateSelection() },
