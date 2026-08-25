@@ -1098,6 +1098,16 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           <div className="field-row">
             <button onClick={() => openLayersPanel()}>&larr; All layers</button>
           </div>
+          <label className="field">
+            <span>Name</span>
+            <input
+              value={layerNameInput}
+              onChange={(e) => {
+                setLayerNameInput(e.target.value)
+                renameLayer(vectorLayer.layerId, e.target.value)
+              }}
+            />
+          </label>
           <label
             className="role-checkbox"
             title="Locked shapes on this layer can't be selected, dragged, resized, or nudged on the canvas — same rule as a locked image layer. Untick to edit them again, or use this layer's settings/properties panel entry point instead."
@@ -1109,7 +1119,6 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
             />
             locked
           </label>
-          <p className="properties-empty">This layer has no other settings.</p>
         </aside>
       )
     }
@@ -1568,7 +1577,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
                 <button
                   className="layer-name-button"
                   onClick={() => selectLayers([layer.layerId])}
-                  title={layer.kind === 'image' ? 'Click for settings, position, and connection points' : layer.name}
+                  title={layer.kind === 'image' ? 'Click for settings, position, and connection points' : 'Click to rename or lock this layer'}
                 >
                   {layer.locked ? '\u{1F512} ' : ''}
                   {layer.name}
