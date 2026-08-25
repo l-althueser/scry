@@ -3430,9 +3430,16 @@ export class SvgCanvas {
   }
 
   /**
-   * Thin dashed lines from each selected instance's origin to its enabled
-   * name/value/setpoint labels — the link stays visible even after a label
-   * has been dragged away from its default position (see onRoleMoved).
+   * Thin dashed lines from each selected instance's own body center to its
+   * enabled name/value/setpoint labels — the link stays visible even after a
+   * label has been dragged away from its default position (see
+   * onRoleMoved). Anchored at the body's visual center rather than the
+   * instance's transform origin: for most types that origin sits on an edge
+   * or corner of the body (e.g. a valve's is on its left edge, an equipment
+   * box's is its top-left corner), which made every connector look like it
+   * was pointing at a corner instead of "the component this label belongs
+   * to" — the center reads correctly regardless of a type's own local
+   * coordinate-origin convention.
    */
   private drawSelectionConnectors() {
     while (this.connectorsGroup.firstChild) {
@@ -3443,12 +3450,25 @@ export class SvgCanvas {
       if (!instance) continue
 
       const { x, y, rotationDeg } = instance.transform
+      const def = getComponentType(instance.componentTypeId)
+      const corners = resolveLocalBodyCorners(def, instance)
+      const localCenter =
+        corners.length > 0
+          ? {
+              x: (Math.min(...corners.map((c) => c.x)) + Math.max(...corners.map((c) => c.x))) / 2,
+              y: (Math.min(...corners.map((c) => c.y)) + Math.max(...corners.map((c) => c.y))) / 2,
+            }
+          : { x: 0, y: 0 }
+      const rotatedCenter = rotatePoint(localCenter, rotationDeg)
+      const originX = x + rotatedCenter.x
+      const originY = y + rotatedCenter.y
+
       for (const role of instance.roles) {
         if (role.role === 'indicator' || !role.enabled) continue
         const rotated = rotatePoint(role.offset, rotationDeg)
         const line = document.createElementNS(SVG_NS, 'line')
-        line.setAttribute('x1', String(x))
-        line.setAttribute('y1', String(y))
+        line.setAttribute('x1', String(originX))
+        line.setAttribute('y1', String(originY))
         line.setAttribute('x2', String(x + rotated.x))
         line.setAttribute('y2', String(y + rotated.y))
         line.setAttribute('class', 'gv-connector-line')

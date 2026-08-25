@@ -29,7 +29,7 @@ once, then *scry* the running system through it.
   versioned, with undo/redo.
 - **Tag-based live export**: every taggable element is exported using a
   simple, predictable `<Name>_<suffix>` ID convention (`_value`, `_name`,
-  `_setpoint`, `_indicator`), so any downstream system that can address SVG
+  `_setpoint`, `_indicator`, `pipe`), so any downstream system that can address SVG
   elements by ID and set their text/fill can drive the diagram live.
 
   ```js

@@ -33,8 +33,8 @@ export const EQUIPMENT_BOX_TYPE = 'equipment-box'
  * property at render/update/export time (see computeBoxSize/computePorts),
  * via the registry's getLocalBodyCorners/getPorts per-instance hooks.
  */
-const MIN_WIDTH = 40
-const MIN_HEIGHT = 30
+const MIN_WIDTH = 16
+const MIN_HEIGHT = 12
 const TEXT_PADDING_X = 6
 const TEXT_PADDING_Y = 6
 const FONT_SIZE = 10
@@ -135,10 +135,11 @@ function computeBoxTextLayout(
   }
 }
 
-type PolygonShape = 'diamond' | 'connector-arrow' | 'double-connector-arrow' | 'block-arrow' | 'double-block-arrow'
+type PolygonShape = 'triangle' | 'diamond' | 'connector-arrow' | 'double-connector-arrow' | 'block-arrow' | 'double-block-arrow'
 type BoxShape = 'rectangle' | 'rounded-rectangle' | 'ellipse' | 'cylinder' | PolygonShape
 
 const POLYGON_SHAPES: readonly PolygonShape[] = [
+  'triangle',
   'diamond',
   'connector-arrow',
   'double-connector-arrow',
@@ -200,14 +201,23 @@ const DOUBLE_BLOCK_ARROW_SHAFT_HEIGHT_FRACTION = 0.5
 
 /**
  * Point list for every non-rect/non-ellipse shape, always pointing local +x
- * ("east"; rotate the instance to point elsewhere): a rhombus; a
- * flowchart-style off-page-connector (rectangle tapering to a point), single-
- * and double-ended; a classic block arrow (shaft + triangular head), single-
- * and double-ended.
+ * ("east"; rotate the instance to point elsewhere) — except `triangle`,
+ * which points "north" (apex up) since that's its usual orientation in a
+ * diagram (a flow direction / alarm / warning marker), unlike the others
+ * here which are all inline connector/arrow glyphs read left-to-right: a
+ * rhombus; a flowchart-style off-page-connector (rectangle tapering to a
+ * point), single- and double-ended; a classic block arrow (shaft +
+ * triangular head), single- and double-ended.
  */
 function polygonPoints(shape: PolygonShape, width: number, height: number): string {
   let points: { x: number; y: number }[]
-  if (shape === 'diamond') {
+  if (shape === 'triangle') {
+    points = [
+      { x: width / 2, y: 0 },
+      { x: width, y: height },
+      { x: 0, y: height },
+    ]
+  } else if (shape === 'diamond') {
     points = [
       { x: width / 2, y: 0 },
       { x: width, y: height / 2 },
@@ -640,6 +650,7 @@ const instanceOptions: InstanceOptionDescriptor[] = [
       { value: 'rounded-rectangle', label: 'Rounded rectangle' },
       { value: 'ellipse', label: 'Ellipse' },
       { value: 'cylinder', label: 'Cylinder' },
+      { value: 'triangle', label: 'Triangle' },
       { value: 'diamond', label: 'Diamond' },
       { value: 'connector-arrow', label: 'Arrow (off-page connector)' },
       { value: 'double-connector-arrow', label: 'Double arrow (off-page connector)' },
