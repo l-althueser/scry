@@ -23,9 +23,11 @@ import { loadImage } from '../import/imageTransparency'
 import { estimateDataUriBytes, formatBytes } from '../import/imageResize'
 import {
   BOX_ROLE_FILL,
+  LABEL_BOX_WIDTH,
   LABEL_ROLE_ORDER,
   componentHasPipeColorOption,
   getComponentType,
+  resolveLabelWidth,
   rotatePoint,
   type InstanceOptionDescriptor,
 } from '../library'
@@ -1740,6 +1742,45 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           </label>
         ))}
       </fieldset>
+
+      {(() => {
+        const rawLabelWidth = instance.propertyValues.labelWidth
+        const userLabelWidth = typeof rawLabelWidth === 'number' ? rawLabelWidth : LABEL_BOX_WIDTH
+        const effectiveLabelWidth = resolveLabelWidth(instance)
+        const autoGrown = effectiveLabelWidth > userLabelWidth + 0.01
+        return (
+          <fieldset className="field roles-field">
+            <legend>
+              Label width
+              <InfoIcon text="Shared by every label box on this instance (name/value/setpoint) so they all line up. Grows automatically past this if the name text needs more room; never shrinks below it." />
+            </legend>
+            <div className="field-row">
+              <label className="field">
+                <span>Width</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={userLabelWidth}
+                  onChange={(e) =>
+                    setInstancePropertyValue(instance.instanceId, 'labelWidth', Math.max(1, Number(e.target.value) || 1))
+                  }
+                />
+              </label>
+              <button
+                disabled={typeof rawLabelWidth !== 'number'}
+                onClick={() => setInstancePropertyValue(instance.instanceId, 'labelWidth', null)}
+              >
+                Default
+              </button>
+            </div>
+            {autoGrown && (
+              <p className="field-hint">
+                Auto-widened to {Math.round(effectiveLabelWidth)} to fit the name — shrink the name or accept this width.
+              </p>
+            )}
+          </fieldset>
+        )
+      })()}
 
       {instance.roles
         .filter((role) => LABEL_ROLE_ORDER.includes(role.role) && role.enabled)

@@ -4,12 +4,14 @@ import {
   LABEL_BOX_HEIGHT,
   PLACEHOLDER_ROLE_TEXT,
   SVG_NS,
+  applyLabelBoxWidth,
   applyRoleBoxStyling,
   createLabelBoxElement,
   escapeXml,
   fmt,
   labelBoxExportLines,
   packRoleOffsets,
+  resolveLabelWidth,
   roleTransformAttr,
   rotatePoint,
 } from './componentUtils'
@@ -506,6 +508,7 @@ function update(group: SVGGElement, instance: ComponentInstance) {
     indicatorGroup.id = `${instance.tag}_indicator`
   }
 
+  const labelWidth = resolveLabelWidth(instance)
   for (const role of instance.roles) {
     if (role.role === 'indicator') continue
     const el = group.querySelector<SVGGElement>(`.gv-role-${role.role}`)
@@ -516,6 +519,7 @@ function update(group: SVGGElement, instance: ComponentInstance) {
     const rotated = rotatePoint(role.offset, rotationDeg)
     el.setAttribute('transform', roleTransformAttr(rotated, role.rotationDeg))
     applyRoleBoxStyling(el, role)
+    applyLabelBoxWidth(el, labelWidth)
 
     const roleText = el.querySelector('text')
     if (!roleText) continue
@@ -567,6 +571,7 @@ function exportInstance(instance: ComponentInstance): string[] {
   }
   lines.push(`    </g>`)
 
+  const labelWidth = resolveLabelWidth(instance)
   for (const role of instance.roles) {
     if (!role.enabled) continue
 
@@ -586,11 +591,13 @@ function exportInstance(instance: ComponentInstance): string[] {
 
     lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
     lines.push(
-      ...labelBoxExportLines('      ', role.role, roleText, {
-        fill: role.fillColor,
-        stroke: role.strokeColor,
-        textColor: role.textColor,
-      }),
+      ...labelBoxExportLines(
+        '      ',
+        role.role,
+        roleText,
+        { fill: role.fillColor, stroke: role.strokeColor, textColor: role.textColor },
+        labelWidth,
+      ),
     )
     lines.push(`    </g>`)
   }

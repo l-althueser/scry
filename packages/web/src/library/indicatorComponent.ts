@@ -3,12 +3,14 @@ import {
   LABEL_BOX_HEIGHT,
   LABEL_ROLE_ORDER,
   PLACEHOLDER_ROLE_TEXT,
+  applyLabelBoxWidth,
   applyRoleBoxStyling,
   createLabelBoxElement,
   escapeXml,
   fmt,
   labelBoxExportLines,
   packRoleOffsets,
+  resolveLabelWidth,
   roleTransformAttr,
   rotatePoint,
 } from './componentUtils'
@@ -55,6 +57,7 @@ function updateProcessIndicator(group: SVGGElement, instance: ComponentInstance)
   const { x, y, rotationDeg } = instance.transform
   group.setAttribute('transform', `translate(${x},${y}) rotate(${rotationDeg})`)
 
+  const labelWidth = resolveLabelWidth(instance)
   for (const role of instance.roles) {
     const el = group.querySelector<SVGGElement>(`.gv-role-${role.role}`)
     if (!el) continue
@@ -63,6 +66,7 @@ function updateProcessIndicator(group: SVGGElement, instance: ComponentInstance)
     el.id = `${instance.tag}_${role.role}`
     el.setAttribute('transform', roleTransformAttr(role.offset, role.rotationDeg))
     applyRoleBoxStyling(el, role)
+    applyLabelBoxWidth(el, labelWidth)
 
     const text = el.querySelector('text')
     if (!text) continue
@@ -77,6 +81,7 @@ function exportProcessIndicatorInstance(instance: ComponentInstance): string[] {
 
   lines.push(`    <!-- ${tag} (${escapeXml(instance.componentTypeId)}) -->`)
 
+  const labelWidth = resolveLabelWidth(instance)
   for (const role of instance.roles) {
     if (!role.enabled) continue
 
@@ -93,11 +98,13 @@ function exportProcessIndicatorInstance(instance: ComponentInstance): string[] {
       `    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, rotationDeg + (role.rotationDeg ?? 0))}">`,
     )
     lines.push(
-      ...labelBoxExportLines('      ', role.role, text, {
-        fill: role.fillColor,
-        stroke: role.strokeColor,
-        textColor: role.textColor,
-      }),
+      ...labelBoxExportLines(
+        '      ',
+        role.role,
+        text,
+        { fill: role.fillColor, stroke: role.strokeColor, textColor: role.textColor },
+        labelWidth,
+      ),
     )
     lines.push(`    </g>`)
   }

@@ -6,12 +6,14 @@ import {
   NAME_TEXT_BASELINE_Y,
   PLACEHOLDER_ROLE_TEXT,
   SVG_NS,
+  applyLabelBoxWidth,
   applyRoleBoxStyling,
   createLabelBoxElement,
   escapeXml,
   fmt,
   labelBoxExportLines,
   packRoleOffsets,
+  resolveLabelWidth,
   roleTransformAttr,
   rotatePoint,
 } from './componentUtils'
@@ -345,6 +347,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       indicatorGroup.id = `${instance.tag}_indicator`
     }
 
+    const labelWidth = resolveLabelWidth(instance)
     for (const role of instance.roles) {
       if (role.role === 'indicator') continue
       const el = group.querySelector<SVGGElement>(`.gv-role-${role.role}`)
@@ -355,6 +358,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       const rotated = rotatePoint(role.offset, rotationDeg)
       el.setAttribute('transform', roleTransformAttr(rotated, role.rotationDeg))
       applyRoleBoxStyling(el, role)
+      applyLabelBoxWidth(el, labelWidth)
 
       const text = el.querySelector('text')
       if (!text) continue
@@ -409,6 +413,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     }
     lines.push(`    </g>`)
 
+    const labelWidth = resolveLabelWidth(instance)
     for (const role of instance.roles) {
       if (!role.enabled) continue
 
@@ -436,19 +441,23 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
       lines.push(`    <g id="${tag}_${role.role}" transform="${roleTransformAttr({ x: labelX, y: labelY }, role.rotationDeg)}">`)
       if (role.role === 'value' || role.role === 'setpoint' || nameIsBoxed) {
         lines.push(
-          ...labelBoxExportLines('      ', role.role, text, {
-            fill: role.fillColor,
-            stroke: role.strokeColor,
-            textColor: role.textColor,
-          }),
+          ...labelBoxExportLines(
+            '      ',
+            role.role,
+            text,
+            { fill: role.fillColor, stroke: role.strokeColor, textColor: role.textColor },
+            labelWidth,
+          ),
         )
       } else if (role.fillColor || role.strokeColor) {
         lines.push(
-          ...labelBoxExportLines('      ', role.role, text, {
-            fill: role.fillColor ?? 'transparent',
-            stroke: role.strokeColor ?? 'transparent',
-            textColor: role.textColor,
-          }),
+          ...labelBoxExportLines(
+            '      ',
+            role.role,
+            text,
+            { fill: role.fillColor ?? 'transparent', stroke: role.strokeColor ?? 'transparent', textColor: role.textColor },
+            labelWidth,
+          ),
         )
       } else {
         lines.push(

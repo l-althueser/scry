@@ -1,9 +1,9 @@
 import type { ComponentInstance, FreeShape, Layer, LeaderLine, PipeInstance } from '@svg-editor/shared'
 import {
   LABEL_BOX_HEIGHT,
-  LABEL_BOX_WIDTH,
   escapeXml,
   getComponentType,
+  resolveLabelWidth,
   resolveLocalBodyCorners,
   rotatePoint,
 } from '../library'
@@ -164,12 +164,13 @@ function computeBounds(
       maxY = Math.max(maxY, y + r.y)
     }
 
+    const labelHalfWidth = resolveLabelWidth(inst) / 2
     for (const role of inst.roles) {
       if (role.role === 'indicator' || !role.enabled) continue
       const r = rotatePoint(role.offset, rotationDeg)
       const corners = [
-        { x: r.x - LABEL_BOX_WIDTH / 2, y: r.y },
-        { x: r.x + LABEL_BOX_WIDTH / 2, y: r.y + LABEL_BOX_HEIGHT },
+        { x: r.x - labelHalfWidth, y: r.y },
+        { x: r.x + labelHalfWidth, y: r.y + LABEL_BOX_HEIGHT },
       ]
       for (const c of corners) {
         minX = Math.min(minX, x + c.x)

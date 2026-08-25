@@ -1,4 +1,4 @@
-import type { RoleInstance, Suffix } from '@svg-editor/shared'
+import type { ComponentInstance, RoleInstance, Suffix } from '@svg-editor/shared'
 
 export const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -64,6 +64,57 @@ export function rotatePoint(pt: { x: number; y: number }, deg: number): { x: num
 export const LABEL_BOX_WIDTH = 48
 export const LABEL_BOX_HEIGHT = 16
 
+const LABEL_TEXT_FONT_SIZE = 9
+const LABEL_TEXT_PADDING_X = 6
+
+/**
+ * A canvas 2D context's font metrics, reused across calls — a per-character
+ * average (e.g. "0.6 * font-size") overestimates a name's real rendered
+ * width because it has to cover the widest glyphs (M, W) for every
+ * character, even ones a typical tag mostly uses (narrow digits/letters
+ * like I, 1, L) — so the auto-grow box ends up visibly wider than the text
+ * actually needs, especially as the name gets longer and the overestimate
+ * compounds. Measuring the real string with the same font the box's own
+ * `<text>` uses gives an exact width instead.
+ */
+let measureCtx: CanvasRenderingContext2D | null | undefined
+function textWidth(text: string, fontSize: number): number {
+  if (measureCtx === undefined) {
+    measureCtx = document.createElement('canvas').getContext('2d')
+  }
+  if (!measureCtx) return text.length * fontSize * 0.6 // no canvas support: fall back to a rough estimate
+  measureCtx.font = `${fontSize}px Arial`
+  return measureCtx.measureText(text).width
+}
+
+/**
+ * The width every name/value/setpoint box on one instance shares — the
+ * larger of the user's own override (`propertyValues.labelWidth`, falling
+ * back to LABEL_BOX_WIDTH) and however wide the "name" role's own text needs
+ * to avoid clipping. Only `name` drives the auto-grow side of this: value/
+ * setpoint show a live process value or the "waiting ..." placeholder, whose
+ * real width isn't knowable at design time, so they just inherit whatever
+ * width `name` (or the user) settled on — "all label boxes of one component
+ * share the same width" is the whole point, not an accident of a shared
+ * constant.
+ */
+export function resolveLabelWidth(instance: Pick<ComponentInstance, 'tag' | 'propertyValues' | 'roles'>): number {
+  const raw = instance.propertyValues.labelWidth
+  const userWidth = typeof raw === 'number' && raw > 0 ? raw : LABEL_BOX_WIDTH
+  const nameRole = instance.roles.find((r) => r.role === 'name')
+  const nameText = nameRole?.labelTextOverride ?? instance.tag
+  const autoWidth = textWidth(nameText, LABEL_TEXT_FONT_SIZE) + LABEL_TEXT_PADDING_X * 2
+  return Math.max(userWidth, autoWidth)
+}
+
+/** Resizes a role's box (or hit-area) rect to `width`, keeping it centered at local x=0 — called every update() alongside applyRoleBoxStyling so a live labelWidth change (or auto-grow from an edited name) takes effect immediately. */
+export function applyLabelBoxWidth(el: SVGGElement, width: number): void {
+  const rect = el.querySelector('rect')
+  if (!rect) return
+  rect.setAttribute('x', String(-width / 2))
+  rect.setAttribute('width', String(width))
+}
+
 /**
  * The "name" role renders as bare text (no box), unlike value/setpoint —
  * but its text still needs to sit at this same vertical anchor within its
@@ -97,13 +148,13 @@ export const NAME_TEXT_BASELINE_Y = LABEL_BOX_HEIGHT / 2
  * for every type, not a new inaccuracy introduced here.
  */
 export function roleBoxCorners(
-  instance: { transform: { x: number; y: number; rotationDeg: number } },
+  instance: Pick<ComponentInstance, 'transform' | 'tag' | 'propertyValues' | 'roles'>,
   role: Pick<RoleInstance, 'role' | 'offset' | 'rotationDeg'>,
 ): { x: number; y: number }[] | null {
   if (role.role === 'indicator') return null
   const anchor = rotatePoint(role.offset, instance.transform.rotationDeg)
   const worldAnchor = { x: instance.transform.x + anchor.x, y: instance.transform.y + anchor.y }
-  const half = LABEL_BOX_WIDTH / 2
+  const half = resolveLabelWidth(instance) / 2
   const localCorners = [
     { x: -half, y: 0 },
     { x: half, y: 0 },
@@ -125,16 +176,22 @@ export const BOX_ROLE_FILL: Partial<Record<string, string>> = {
   name: '#f6c59d',
 }
 
-/** A centered box+text label DOM element for one role, shared by every component type that uses this style. */
-export function createLabelBoxElement(role: string): SVGGElement {
+/**
+ * A centered box+text label DOM element for one role, shared by every
+ * component type that uses this style. `width` is only the box's initial
+ * size (matters for contexts that never call update(), e.g. a palette
+ * preview icon) — every real placed instance gets it kept in sync with
+ * resolveLabelWidth on every update() via applyLabelBoxWidth.
+ */
+export function createLabelBoxElement(role: string, width: number = LABEL_BOX_WIDTH): SVGGElement {
   const g = document.createElementNS(SVG_NS, 'g')
   g.setAttribute('class', `gv-role gv-role-${role}`)
   g.setAttribute('data-role', role)
 
   const rect = document.createElementNS(SVG_NS, 'rect')
-  rect.setAttribute('x', String(-LABEL_BOX_WIDTH / 2))
+  rect.setAttribute('x', String(-width / 2))
   rect.setAttribute('y', '0')
-  rect.setAttribute('width', String(LABEL_BOX_WIDTH))
+  rect.setAttribute('width', String(width))
   rect.setAttribute('height', String(LABEL_BOX_HEIGHT))
   rect.setAttribute('fill', BOX_ROLE_FILL[role] ?? '#ffffff')
   rect.setAttribute('stroke', '#000000')
@@ -189,12 +246,13 @@ export function labelBoxExportLines(
   role: string,
   text: string,
   colors?: { fill?: string | null; stroke?: string | null; textColor?: string | null },
+  width: number = LABEL_BOX_WIDTH,
 ): string[] {
   const fill = colors?.fill ?? BOX_ROLE_FILL[role] ?? '#ffffff'
   const stroke = colors?.stroke ?? '#000000'
   const textColor = colors?.textColor ?? '#000000'
   return [
-    `${indent}<rect x="${-LABEL_BOX_WIDTH / 2}" y="0" width="${LABEL_BOX_WIDTH}" height="${LABEL_BOX_HEIGHT}" fill="${fill}" stroke="${stroke}" stroke-width="1" />`,
+    `${indent}<rect x="${-width / 2}" y="0" width="${width}" height="${LABEL_BOX_HEIGHT}" fill="${fill}" stroke="${stroke}" stroke-width="1" />`,
     `${indent}<text x="0" y="${LABEL_BOX_HEIGHT / 2}" text-anchor="middle" dominant-baseline="central" font-family="Arial" font-size="9" fill="${textColor}">${escapeXml(text)}</text>`,
   ]
 }
