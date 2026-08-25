@@ -14,7 +14,6 @@ import {
   getDisplayPoints,
   getPipePoints,
   PIPE_DEFAULT_COLOR,
-  PIPE_NON_CLICKABLE_COLOR,
   resolveIndicatorTag,
   type Point,
 } from '../pipes/pipeGeometry'
@@ -223,7 +222,7 @@ function SelectionStylePanel({
           <ColorPickerRow label="Line" value={null} defaultValue="#000000" onChange={(v) => onStyleChange('pipe', 'stroke', v)} />
 
           <div className="field-row">
-            <span style={{ flex: '1 1 auto' }}>Indicator (_indicator)</span>
+            <span style={{ flex: '1 1 auto' }}>Indicator (_pipe)</span>
             <button onClick={() => onPipeFlagChange('indicatorEnabled', true)}>Enable</button>
             <button onClick={() => onPipeFlagChange('indicatorEnabled', false)}>Disable</button>
           </div>
@@ -365,7 +364,8 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   // regex silently lets the last matching occurrence in the exported SVG
   // text win on a collision rather than erroring, so this is worth flagging
   // even though it might be intentional (e.g. deliberately sharing an
-  // "_indicator" tag isn't done this way — that's volumeTag on pipes).
+  // "_indicator" tag isn't done this way — that's volumeTag on pipes, whose
+  // shared id is "_pipe", not "_indicator").
   const duplicateInstanceTagCount = instance
     ? instances.filter((i) => i.tag === instance.tag).length
     : 0
@@ -599,7 +599,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               <InfoIcon
                 text={
                   volumeSiblings.length > 1
-                    ? `Shared with ${volumeSiblings.length - 1} other connected pipe${volumeSiblings.length - 1 === 1 ? '' : 's'} (no valve/component in between) — gas fills this whole run at once, so they all share one "_indicator" id.`
+                    ? `Shared with ${volumeSiblings.length - 1} other connected pipe${volumeSiblings.length - 1 === 1 ? '' : 's'} (no valve/component in between) — gas fills this whole run at once, so they all share one "_pipe" id.`
                     : 'Not connected to any other pipe right now (a component, e.g. a valve, sits between it and everything else) — its own one-pipe volume.'
                 }
               />
@@ -620,7 +620,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
             className="role-checkbox"
             title={
               (pipe.indicatorEnabled
-                ? `Exports as ${resolveIndicatorTag(pipe)}_indicator — a small dot at each connected segment's own midpoint, all sharing that id, so coloring it in Node-RED lights up the whole connected run at once.`
+                ? `Exports as ${resolveIndicatorTag(pipe)}_pipe — the pipe's own line, not a separate dot, so it's clickable/colorable along its whole length. Every segment in this connected run shares that id, so coloring it in Node-RED lights up the whole run at once.`
                 : "Currently just a decorative line — Node-RED can't target it.") +
               (volumeSiblings.length > 1
                 ? ` Toggling this applies to all ${volumeSiblings.length} pipes in this connected run, not just this segment.`
@@ -632,20 +632,18 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               checked={pipe.indicatorEnabled}
               onChange={(e) => setPipeIndicatorEnabled(pipe.instanceId, e.target.checked)}
             />
-            clickable / colorable (_indicator)
+            clickable / colorable (_pipe)
           </label>
 
           <ColorPickerRow
             label="Line"
             value={pipe.strokeColor}
-            defaultValue={pipe.indicatorEnabled ? PIPE_DEFAULT_COLOR : PIPE_NON_CLICKABLE_COLOR}
+            defaultValue={PIPE_DEFAULT_COLOR}
             onChange={(v) => setPipeColor(pipe.instanceId, v)}
             hint={
               pipe.strokeColor
                 ? `Custom color${volumeSiblings.length > 1 ? ' — applies to the whole connected run' : ''} overrides the default.`
-                : pipe.indicatorEnabled
-                  ? 'Default: black (indicator enabled).'
-                  : 'Default: light gray (no indicator, purely decorative).'
+                : 'Default: black.'
             }
           />
 

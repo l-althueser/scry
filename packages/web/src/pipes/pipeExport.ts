@@ -12,12 +12,15 @@ import {
 } from './pipeGeometry'
 
 /**
- * Export markup for one pipe. The decorative line is always untagged; the
- * "{indicatorTag}_indicator" circle is only emitted when indicatorEnabled,
- * matching how a ComponentInstance only exports its enabled roles. The
- * indicator tag is the pipe's *volume* tag, not its own — every pipe in the
- * same connected volume shares one id, so Node-RED coloring it lights up
- * the whole run at once (see pipes/pipeVolumes.ts). `pointsByPipe` is the raw
+ * Export markup for one pipe. When indicatorEnabled, the pipe's own visible
+ * line carries the "{indicatorTag}_pipe" id directly — no separate dot
+ * marker — so the entire connected run is what's interactive/colorable in
+ * Node-RED, via the "_pipe" suffix (a component instance's own status dot
+ * still uses "_indicator" unchanged; pipes are their own distinct Node-RED
+ * element class). The indicator tag is the pipe's *volume* tag, not its
+ * own — every pipe in the same connected volume shares one id, so every
+ * segment's line carries it and Node-RED coloring it lights up the whole
+ * run at once (see pipes/pipeVolumes.ts). `pointsByPipe` is the raw
  * port/waypoint list (used for curved splines); `displayPointsByPipe` is the
  * per-mode rendering copy (orthogonal-expanded where applicable) used for
  * hop detection and the straight/orthogonal path itself — see
@@ -47,20 +50,13 @@ export function exportPipeInstance(
       : straightPathDWithHops(displayPoints, computeHopsForPipe(pipe.instanceId, allPipes, displayPointsByPipe))
 
   const color = escapeXml(resolvePipeColor(pipe))
-  lines.push(`    <path d="${d}" fill="none" stroke="${color}" stroke-width="2" />`)
-
-  if (pipe.indicatorEnabled) {
-    const mid = midpoint(displayPoints)
-    const indicatorTag = escapeXml(resolveIndicatorTag(pipe))
-    lines.push(
-      `    <circle id="${indicatorTag}_indicator" cx="${fmt(mid.x)}" cy="${fmt(mid.y)}" r="5" fill="black" />`,
-    )
-  }
+  const idAttr = pipe.indicatorEnabled ? ` id="${escapeXml(resolveIndicatorTag(pipe))}_pipe"` : ''
+  lines.push(`    <path${idAttr} d="${d}" fill="none" stroke="${color}" stroke-width="2" />`)
 
   if (pipe.nameEnabled && isNameLabelPipe) {
     // Same bare-text style as a component instance's `name` role
     // (createLabelBoxElement's non-box branch) — direct <text> child, no
-    // box. Text is the pipe's *volume* tag, same as "_indicator" above.
+    // box. Text is the pipe's *volume* tag, same as "_pipe" above.
     const mid = midpoint(displayPoints)
     const nameTag = escapeXml(resolveIndicatorTag(pipe))
     lines.push(

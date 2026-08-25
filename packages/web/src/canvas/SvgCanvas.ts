@@ -3537,12 +3537,6 @@ export class SvgCanvas {
         hitPath.setAttribute('fill', 'none')
         group.appendChild(hitPath)
 
-        const indicatorCircle = document.createElementNS(SVG_NS, 'circle')
-        indicatorCircle.setAttribute('class', 'gv-pipe-indicator')
-        indicatorCircle.setAttribute('r', '5')
-        indicatorCircle.setAttribute('fill', 'black')
-        group.appendChild(indicatorCircle)
-
         // Bare-text label, same style as a component instance's `name` role
         // — see syncPipes below for why its content is the pipe's volume tag.
         const nameText = document.createElementNS(SVG_NS, 'text')
@@ -3572,7 +3566,6 @@ export class SvgCanvas {
 
       const linePath = group.querySelector<SVGPathElement>('.gv-pipe-line')!
       const hitPath = group.querySelector<SVGPathElement>('.gv-pipe-hit')!
-      const indicatorCircle = group.querySelector<SVGCircleElement>('.gv-pipe-indicator')!
       const nameText = group.querySelector<SVGTextElement>('.gv-pipe-name')!
       const arrowsGroup = group.querySelector<SVGGElement>('.gv-pipe-arrows')!
 
@@ -3587,13 +3580,17 @@ export class SvgCanvas {
       hitPath.setAttribute('d', d)
       linePath.setAttribute('stroke', resolvePipeColor(pipe))
 
-      indicatorCircle.style.display = pipe.indicatorEnabled ? '' : 'none'
-      indicatorCircle.id = `${resolveIndicatorTag(pipe)}_indicator`
+      // No separate dot marker — when enabled, the pipe's own visible line
+      // carries the "_pipe" id directly, same as the exported SVG (see
+      // pipeExport.ts), so the entire connected run is what's interactive.
+      if (pipe.indicatorEnabled) {
+        linePath.id = `${resolveIndicatorTag(pipe)}_pipe`
+      } else if (linePath.id) {
+        linePath.removeAttribute('id')
+      }
       const mid = midpoint(displayPoints)
-      indicatorCircle.setAttribute('cx', String(mid.x))
-      indicatorCircle.setAttribute('cy', String(mid.y))
 
-      // Text is the pipe's *volume* tag, same as "_indicator" above — labels
+      // Text is the pipe's *volume* tag, same as "_pipe" above — labels
       // the connected run, not just this one segment (see PipeInstance.nameEnabled).
       // Only the one pipe computeNameLabelPipeIds picked for this volume
       // actually shows it, even though every pipe in the volume has

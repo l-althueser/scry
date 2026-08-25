@@ -1845,7 +1845,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         toPort,
         routingMode: 'straight',
         waypoints,
-        indicatorEnabled: false,
+        indicatorEnabled: true,
         nameEnabled: false,
         strokeColor: null,
         volumeTag: null,

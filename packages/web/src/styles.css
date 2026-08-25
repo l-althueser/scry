@@ -662,14 +662,6 @@ body {
   cursor: pointer;
 }
 
-/* A white ring around the indicator dot reads as a deliberate marker in the
-   editor rather than a stray black artifact sitting on the pipe line. */
-.gv-pipe-indicator {
-  cursor: default;
-  stroke: #ffffff;
-  stroke-width: 1.5;
-}
-
 .gv-pipe-draft {
   stroke: #2563eb;
   stroke-width: 2;

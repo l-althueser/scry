@@ -20,28 +20,21 @@ export interface Point {
 const HOP_RADIUS = 6
 
 export const PIPE_DEFAULT_COLOR = '#000000'
-export const PIPE_NON_CLICKABLE_COLOR = '#b3b3b3'
 /** Default size (tip-to-base length, world units) for a newly toggled-on PipeArrow. */
 export const DEFAULT_ARROW_SIZE = 12
 
-/**
- * Resolves the line color a pipe should render/export with. An explicit
- * strokeColor always wins; otherwise the color itself communicates
- * clickability — black for pipes with a live "_indicator", light gray for
- * purely decorative ones — so the two are visually distinguishable without
- * relying on the small indicator dot alone.
- */
-export function resolvePipeColor(pipe: Pick<PipeInstance, 'strokeColor' | 'indicatorEnabled'>): string {
-  if (pipe.strokeColor) return pipe.strokeColor
-  return pipe.indicatorEnabled ? PIPE_DEFAULT_COLOR : PIPE_NON_CLICKABLE_COLOR
+/** Resolves the line color a pipe should render/export with. An explicit strokeColor always wins; otherwise every pipe defaults to plain black regardless of indicatorEnabled. */
+export function resolvePipeColor(pipe: Pick<PipeInstance, 'strokeColor'>): string {
+  return pipe.strokeColor || PIPE_DEFAULT_COLOR
 }
 
 /**
- * The tag used for a pipe's exported "_indicator" id. Every pipe in the same
- * "volume" (see pipes/pipeVolumes.ts) shares this id, so Node-RED coloring
- * the volume's indicator lights up every connected segment at once — gas
- * fills the whole volume, not just one pipe. Falls back to the pipe's own
- * tag if volumeTag hasn't been computed yet (shouldn't normally happen).
+ * The tag used for a pipe's exported "_pipe" id (and its "_name" label).
+ * Every pipe in the same "volume" (see pipes/pipeVolumes.ts) shares this id,
+ * so Node-RED coloring the volume's indicator lights up every connected
+ * segment at once — gas fills the whole volume, not just one pipe. Falls
+ * back to the pipe's own tag if volumeTag hasn't been computed yet
+ * (shouldn't normally happen).
  */
 export function resolveIndicatorTag(pipe: Pick<PipeInstance, 'tag' | 'volumeTag'>): string {
   return pipe.volumeTag ?? pipe.tag

@@ -123,11 +123,7 @@ export interface PipeInstance {
    * in one volume at once.
    */
   nameEnabled: boolean
-  /**
-   * Explicit line color override. When unset, the line falls back to a
-   * default that itself communicates clickability: black for pipes with
-   * indicatorEnabled, light gray for purely decorative ones.
-   */
+  /** Explicit line color override. When unset, the line falls back to plain black regardless of indicatorEnabled. */
   strokeColor?: string | null
   /**
    * Tag of the "pipe volume" this pipe belongs to — the maximal set of
