@@ -3587,15 +3587,24 @@ export class SvgCanvas {
   /**
    * Reconciles pipe DOM. Must be re-run whenever instances change too (not
    * just pipes), since port positions — and therefore pipe geometry — move
-   * with their owning instance.
+   * with their owning instance. `freeShapes` is likewise taken as a live
+   * parameter rather than read from `this.latestShapes` (mirroring
+   * `instances` here and `syncLeaderLines` below): CanvasView's effects can
+   * fire this before the effect that refreshes `this.latestShapes` runs in
+   * the same commit (e.g. right after a project load, where instances/pipes/
+   * freeShapes all change together), and a pipe anchored to a shape's
+   * connection point (an "scp:" PortRef) would otherwise fail to resolve
+   * against the stale cache and get hidden (`display: none` below) until
+   * some later, unrelated sync happened to run — the exact "pipe vanishes
+   * behind a shape until you drag something" bug this fixes.
    */
-  syncPipes(pipes: PipeInstance[], instances: ComponentInstance[]) {
+  syncPipes(pipes: PipeInstance[], instances: ComponentInstance[], freeShapes: FreeShape[] = this.latestShapes) {
     this.latestPipes = pipes
     const seen = new Set<string>()
     const pointsByPipe = new Map<string, Point[]>()
     const displayPointsByPipe = new Map<string, Point[]>()
     for (const pipe of pipes) {
-      const pts = getPipePoints(pipe, instances, pipes, this.latestLayers, this.latestShapes)
+      const pts = getPipePoints(pipe, instances, pipes, this.latestLayers, freeShapes)
       if (pts) {
         pointsByPipe.set(pipe.instanceId, pts)
         displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
@@ -3812,7 +3821,18 @@ export class SvgCanvas {
     this.latestGroups = groups
   }
 
-  /** Reconciles annotation-shape DOM (add/update/remove groups) — purely decorative, no geometry dependency on instances/pipes. */
+  /**
+   * Reconciles annotation-shape DOM (add/update/remove groups) — purely
+   * decorative, no geometry dependency on instances/pipes itself. Does
+   * re-run syncPipes at the end, though: a pipe anchored to one of these
+   * shapes' connection points ("scp:" PortRef) needs `this.latestShapes`
+   * to be current to resolve its geometry (see syncPipes), and this is the
+   * one place that field actually gets refreshed. Same reasoning as
+   * syncLayers's own trailing syncPipes call for image connection points —
+   * both exist so a pipe doesn't stay stuck on stale/missing geometry
+   * (and get hidden) until some unrelated instances/pipes change happens
+   * to re-run syncPipes with fresher data.
+   */
   syncFreeShapes(shapes: FreeShape[]) {
     this.latestShapes = shapes
     const seen = new Set<string>()
@@ -3850,6 +3870,7 @@ export class SvgCanvas {
     }
     this.refreshShapeResizeHandles()
     this.refreshConnectionPointHandles()
+    this.syncPipes(this.latestPipes, this.latestInstances, shapes)
   }
 
   /**
