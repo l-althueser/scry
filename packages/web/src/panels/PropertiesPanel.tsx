@@ -407,6 +407,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const closeLayersPanel = useProjectStore((s) => s.closeLayersPanel)
   const deleteConnectionPoint = useProjectStore((s) => s.deleteConnectionPoint)
   const deleteShapeConnectionPoint = useProjectStore((s) => s.deleteShapeConnectionPoint)
+  const deleteInstanceConnectionPoint = useProjectStore((s) => s.deleteInstanceConnectionPoint)
   const selectedConnectionPoint = useProjectStore((s) => s.selectedConnectionPoint)
   const selectConnectionPoint = useProjectStore((s) => s.selectConnectionPoint)
   const setTool = useProjectStore((s) => s.setTool)
@@ -2074,6 +2075,41 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
           </div>
         )
       })()}
+
+      <fieldset className="field roles-field">
+        <legend>Connection points ({(instance.connectionPoints ?? []).length})</legend>
+        {(instance.connectionPoints ?? []).length === 0 && <p className="field-hint">None yet.</p>}
+        {(instance.connectionPoints ?? []).map((cp, i) => (
+          <div key={cp.pointId} className="field-row">
+            <button
+              className={
+                selectedConnectionPoint?.ownerKind === 'instance' &&
+                selectedConnectionPoint.ownerId === instance.instanceId &&
+                selectedConnectionPoint.pointId === cp.pointId
+                  ? 'tool-button active'
+                  : 'tool-button'
+              }
+              onClick={() =>
+                selectConnectionPoint({ ownerKind: 'instance', ownerId: instance.instanceId, pointId: cp.pointId })
+              }
+              title="Click to highlight on canvas — drag its handle there, or use arrow keys, to reposition it."
+            >
+              #{i + 1} ({(cp.relX * 100).toFixed(0)}%, {(cp.relY * 100).toFixed(0)}%)
+            </button>
+            <button className="danger" onClick={() => deleteInstanceConnectionPoint(instance.instanceId, cp.pointId)}>
+              Delete
+            </button>
+          </div>
+        ))}
+        <div className="field-row">
+          <button
+            onClick={() => setTool('place-connection-point-instance', instance.instanceId)}
+            title="Click, then click a spot on the component — pipes can snap to it afterwards, in addition to its regular ports, and it stays put on the component (as a % of its own bounding box) through later moves/rotations. Shift while clicking keeps adding several in a row."
+          >
+            Add connection point
+          </button>
+        </div>
+      </fieldset>
 
       <div className="field-row">
         <button onClick={() => centerRoles(instance.instanceId)}>Re-center labels</button>

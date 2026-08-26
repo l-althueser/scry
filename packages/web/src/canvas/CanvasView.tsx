@@ -29,6 +29,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const drawingShapeKind = useProjectStore((s) => s.drawingShapeKind)
   const connectionPointTargetLayerId = useProjectStore((s) => s.connectionPointTargetLayerId)
   const connectionPointTargetShapeId = useProjectStore((s) => s.connectionPointTargetShapeId)
+  const connectionPointTargetInstanceId = useProjectStore((s) => s.connectionPointTargetInstanceId)
   const selectedConnectionPoint = useProjectStore((s) => s.selectedConnectionPoint)
   const pickTransparentColorTargetLayerId = useProjectStore((s) => s.pickTransparentColorTargetLayerId)
   const gridSize = useProjectStore((s) => s.gridSize)
@@ -73,6 +74,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const resizeImageLayer = useProjectStore((s) => s.resizeImageLayer)
   const addConnectionPoint = useProjectStore((s) => s.addConnectionPoint)
   const addShapeConnectionPoint = useProjectStore((s) => s.addShapeConnectionPoint)
+  const addInstanceConnectionPoint = useProjectStore((s) => s.addInstanceConnectionPoint)
   const selectConnectionPoint = useProjectStore((s) => s.selectConnectionPoint)
   const moveConnectionPoint = useProjectStore((s) => s.moveConnectionPoint)
   const pickTransparentColorAt = useProjectStore((s) => s.pickTransparentColorAt)
@@ -119,6 +121,8 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
         addConnectionPoint(layerId, relX, relY, keepPlacing),
       onShapeConnectionPointAdded: (shapeId, relX, relY, keepPlacing) =>
         addShapeConnectionPoint(shapeId, relX, relY, keepPlacing),
+      onInstanceConnectionPointAdded: (instanceId, relX, relY, keepPlacing) =>
+        addInstanceConnectionPoint(instanceId, relX, relY, keepPlacing),
       onConnectionPointSelected: (selection) => selectConnectionPoint(selection),
       onConnectionPointMoved: (ownerKind, ownerId, pointId, relX, relY) =>
         moveConnectionPoint(ownerKind, ownerId, pointId, relX, relY),
@@ -166,6 +170,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
     if (tool === 'draw-shape') subKind = drawingShapeKind
     else if (tool === 'place-connection-point') subKind = connectionPointTargetLayerId
     else if (tool === 'place-connection-point-shape') subKind = connectionPointTargetShapeId
+    else if (tool === 'place-connection-point-instance') subKind = connectionPointTargetInstanceId
     else if (tool === 'pick-transparent-color') subKind = pickTransparentColorTargetLayerId
     canvasRef.current?.setTool(tool, subKind)
   }, [
@@ -174,6 +179,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
     drawingShapeKind,
     connectionPointTargetLayerId,
     connectionPointTargetShapeId,
+    connectionPointTargetInstanceId,
     pickTransparentColorTargetLayerId,
   ])
 

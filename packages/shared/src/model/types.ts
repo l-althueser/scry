@@ -59,6 +59,17 @@ export interface ComponentInstance {
   propertyValues: Record<string, string | number | boolean | null>
   layerId: string
   roles: RoleInstance[]
+  /**
+   * Pipes can also connect to these, in addition to the type's own fixed
+   * ports — relX/relY fractions of the instance's local (unrotated,
+   * unmirrored) body bounding box (see resolveLocalBodyCorners), same
+   * convention as FreeShape.connectionPoints (reusing ImageConnectionPoint
+   * as-is, same as that field does). Lets a generic type like equipment-box,
+   * whose fixed ports don't cover every place a real diagram needs to
+   * attach a pipe, get extra attachment points without a per-type schema
+   * change. Optional/defaults to [] so existing saved projects load fine.
+   */
+  connectionPoints?: ImageConnectionPoint[]
 }
 
 export type RoutingMode = 'straight' | 'orthogonal' | 'curved' | 'manual'

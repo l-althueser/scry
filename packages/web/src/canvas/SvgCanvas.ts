@@ -40,11 +40,13 @@ import {
   findNearestPipeSegment,
   getDisplayPoints,
   getImageConnectionPointWorldPosition,
+  getInstanceConnectionPointWorldPosition,
   getOrthogonalCorners,
   getPipePoints,
   getPortWorldPosition,
   getShapeConnectionPointWorldPosition,
   imagePointPortId,
+  instancePointPortId,
   midpoint,
   pipePointPortId,
   resolveIndicatorTag,
@@ -88,8 +90,12 @@ export type Tool =
   | 'draw-shape'
   | 'place-connection-point'
   | 'place-connection-point-shape'
+  | 'place-connection-point-instance'
   | 'draw-leader-line'
   | 'pick-transparent-color'
+
+/** Which kind of element a user-placed connection point belongs to — an image layer, a free shape, or (like a fixed port) a component instance. */
+export type ConnectionPointOwnerKind = 'layer' | 'shape' | 'instance'
 
 export interface RoleSelection {
   instanceId: string
@@ -185,10 +191,12 @@ export interface SvgCanvasCallbacks {
   onConnectionPointAdded: (layerId: string, relX: number, relY: number, keepPlacing: boolean) => void
   /** Parallel to onConnectionPointAdded, but relX/relY are fractions of the shape's own bounding box. */
   onShapeConnectionPointAdded: (shapeId: string, relX: number, relY: number, keepPlacing: boolean) => void
+  /** Parallel to onShapeConnectionPointAdded, but relX/relY are fractions of the component instance's own local (unrotated) body bounding box. */
+  onInstanceConnectionPointAdded: (instanceId: string, relX: number, relY: number, keepPlacing: boolean) => void
   /** Clicking (or starting a drag on) a connection-point handle selects it — see connectionPointHandlesGroup. */
-  onConnectionPointSelected: (selection: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null) => void
+  onConnectionPointSelected: (selection: { ownerKind: ConnectionPointOwnerKind; ownerId: string; pointId: string } | null) => void
   /** Live update while dragging a connection-point handle — relX/relY already resolved against the owner's current bbox. No history push per frame, checkpointed via onDragCheckpoint at drag-start like every other continuous drag. */
-  onConnectionPointMoved: (ownerKind: 'layer' | 'shape', ownerId: string, pointId: string, relX: number, relY: number) => void
+  onConnectionPointMoved: (ownerKind: ConnectionPointOwnerKind, ownerId: string, pointId: string, relX: number, relY: number) => void
   /** relX/relY are fractions of the image's current width/height, same convention as onConnectionPointAdded — the store resolves the actual pixel color and reprocesses the image. */
   onTransparentColorPicked: (layerId: string, relX: number, relY: number) => void
 
@@ -330,10 +338,10 @@ export class SvgCanvas {
   private dragShapeStartWorld: Point = { x: 0, y: 0 }
   private dragShapeStartPoints: Point[] = []
   private dragShapePointIndex: number | null = null
-  private dragConnectionPointOwnerKind: 'layer' | 'shape' | null = null
+  private dragConnectionPointOwnerKind: ConnectionPointOwnerKind | null = null
   private dragConnectionPointOwnerId: string | null = null
   private dragConnectionPointId: string | null = null
-  private selectedConnectionPoint: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null = null
+  private selectedConnectionPoint: { ownerKind: ConnectionPointOwnerKind; ownerId: string; pointId: string } | null = null
   private dragLeaderLineId: string | null = null
   private dragLeaderLinePoint: 'from' | 'to' | number | null = null
   private dragLayerId: string | null = null
@@ -516,6 +524,7 @@ export class SvgCanvas {
   private drawingShapeKind: FreeShapeKind | null = null
   private connectionPointTargetLayerId: string | null = null
   private connectionPointTargetShapeId: string | null = null
+  private connectionPointTargetInstanceId: string | null = null
   private pickTransparentColorTargetLayerId: string | null = null
 
   setTool(tool: Tool, subKind: string | null = null) {
@@ -524,6 +533,7 @@ export class SvgCanvas {
     this.drawingShapeKind = tool === 'draw-shape' ? (subKind as FreeShapeKind | null) : null
     this.connectionPointTargetLayerId = tool === 'place-connection-point' ? subKind : null
     this.connectionPointTargetShapeId = tool === 'place-connection-point-shape' ? subKind : null
+    this.connectionPointTargetInstanceId = tool === 'place-connection-point-instance' ? subKind : null
     this.pickTransparentColorTargetLayerId = tool === 'pick-transparent-color' ? subKind : null
     this.svg.style.cursor = tool === 'select' ? 'default' : 'crosshair'
     if (tool !== 'place') {
@@ -998,6 +1008,19 @@ export class SvgCanvas {
     this.drawGrid()
   }
 
+  /** The instance's local (unrotated) body bounding box — the space its own connection points' relX/relY are fractions of (see getInstanceConnectionPointWorldPosition). Null if the type has no body corners at all. */
+  private instanceLocalBodyBounds(instance: ComponentInstance): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    const def = getComponentType(instance.componentTypeId)
+    const corners = resolveLocalBodyCorners(def, instance)
+    if (corners.length === 0) return null
+    return {
+      minX: Math.min(...corners.map((c) => c.x)),
+      minY: Math.min(...corners.map((c) => c.y)),
+      maxX: Math.max(...corners.map((c) => c.x)),
+      maxY: Math.max(...corners.map((c) => c.y)),
+    }
+  }
+
   /**
    * Finds the nearest connectable point within snap range: a component
    * port, or a point (endpoint/waypoint) on another pipe — pipes can branch
@@ -1015,6 +1038,14 @@ export class SvgCanvas {
         const d = Math.hypot(pos.x - worldPt.x, pos.y - worldPt.y)
         if (d <= PORT_SNAP_RADIUS && (!best || d < best.dist)) {
           best = { ref: { instanceId: inst.instanceId, portId: port.portId }, pos, dist: d }
+        }
+      }
+      for (const cp of inst.connectionPoints ?? []) {
+        const pos = getInstanceConnectionPointWorldPosition(inst, cp.pointId)
+        if (!pos) continue
+        const d = Math.hypot(pos.x - worldPt.x, pos.y - worldPt.y)
+        if (d <= PORT_SNAP_RADIUS && (!best || d < best.dist)) {
+          best = { ref: { instanceId: inst.instanceId, portId: instancePointPortId(cp.pointId) }, pos, dist: d }
         }
       }
     }
@@ -1270,12 +1301,17 @@ export class SvgCanvas {
       this.tool === 'draw-pipe' ||
       this.tool === 'place-connection-point' ||
       this.tool === 'place-connection-point-shape' ||
+      this.tool === 'place-connection-point-instance' ||
       this.dragMode === 'move-pipe-endpoint'
     if (showSnapTargets) {
       for (const inst of this.latestInstances) {
         const def = getComponentType(inst.componentTypeId)
         for (const port of resolvePorts(def, inst)) {
           const pos = getPortWorldPosition(inst, port.portId)
+          if (pos) addMarker(pos)
+        }
+        for (const cp of inst.connectionPoints ?? []) {
+          const pos = getInstanceConnectionPointWorldPosition(inst, cp.pointId)
           if (pos) addMarker(pos)
         }
       }
@@ -1669,6 +1705,25 @@ export class SvgCanvas {
       return
     }
 
+    if (this.tool === 'place-connection-point-instance' && this.connectionPointTargetInstanceId) {
+      const instance = this.latestInstances.find((i) => i.instanceId === this.connectionPointTargetInstanceId)
+      const bounds = instance && this.instanceLocalBodyBounds(instance)
+      if (instance && bounds) {
+        const local = rotatePoint(
+          { x: world.x - instance.transform.x, y: world.y - instance.transform.y },
+          -instance.transform.rotationDeg,
+        )
+        const width = bounds.maxX - bounds.minX
+        const height = bounds.maxY - bounds.minY
+        if (width > 0 && height > 0) {
+          const relX = clamp01((local.x - bounds.minX) / width)
+          const relY = clamp01((local.y - bounds.minY) / height)
+          this.callbacks.onInstanceConnectionPointAdded(instance.instanceId, relX, relY, evt.shiftKey)
+        }
+      }
+      return
+    }
+
     if (this.tool === 'pick-transparent-color' && this.pickTransparentColorTargetLayerId) {
       const layer = this.latestLayers.find((l) => l.layerId === this.pickTransparentColorTargetLayerId)
       if (layer && layer.kind === 'image' && layer.width > 0 && layer.height > 0) {
@@ -1755,7 +1810,7 @@ export class SvgCanvas {
     }
 
     if (connectionPointHandleEl) {
-      const ownerKind = connectionPointHandleEl.getAttribute('data-cp-owner-kind') as 'layer' | 'shape'
+      const ownerKind = connectionPointHandleEl.getAttribute('data-cp-owner-kind') as ConnectionPointOwnerKind
       const ownerId = connectionPointHandleEl.getAttribute('data-cp-owner-id')!
       const pointId = connectionPointHandleEl.getAttribute('data-cp-point-id')!
       this.callbacks.onDragCheckpoint()
@@ -2204,7 +2259,7 @@ export class SvgCanvas {
           const relY = clamp01((world.y - layer.y) / layer.height)
           this.callbacks.onConnectionPointMoved('layer', layer.layerId, this.dragConnectionPointId, relX, relY)
         }
-      } else {
+      } else if (this.dragConnectionPointOwnerKind === 'shape') {
         const shape = this.latestShapes.find((s) => s.instanceId === this.dragConnectionPointOwnerId)
         if (shape) {
           const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
@@ -2214,6 +2269,22 @@ export class SvgCanvas {
             const relX = clamp01((world.x - minX) / width)
             const relY = clamp01((world.y - minY) / height)
             this.callbacks.onConnectionPointMoved('shape', shape.instanceId, this.dragConnectionPointId, relX, relY)
+          }
+        }
+      } else {
+        const instance = this.latestInstances.find((i) => i.instanceId === this.dragConnectionPointOwnerId)
+        const bounds = instance && this.instanceLocalBodyBounds(instance)
+        if (instance && bounds) {
+          const local = rotatePoint(
+            { x: world.x - instance.transform.x, y: world.y - instance.transform.y },
+            -instance.transform.rotationDeg,
+          )
+          const width = bounds.maxX - bounds.minX
+          const height = bounds.maxY - bounds.minY
+          if (width > 0 && height > 0) {
+            const relX = clamp01((local.x - bounds.minX) / width)
+            const relY = clamp01((local.y - bounds.minY) / height)
+            this.callbacks.onConnectionPointMoved('instance', instance.instanceId, this.dragConnectionPointId, relX, relY)
           }
         }
       }
@@ -2962,6 +3033,7 @@ export class SvgCanvas {
     this.drawSelectionConnectors()
     this.refreshDragHandles()
     this.refreshInstanceResizeHandles()
+    this.refreshConnectionPointHandles()
   }
 
   /**
@@ -3136,7 +3208,7 @@ export class SvgCanvas {
   }
 
   /** External sync (e.g. cleared by Escape, or selected via a connection-point list row in the panel): highlight only, no callback. */
-  setConnectionPointSelection(selection: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null) {
+  setConnectionPointSelection(selection: { ownerKind: ConnectionPointOwnerKind; ownerId: string; pointId: string } | null) {
     this.selectedConnectionPoint = selection
     this.refreshConnectionPointHandles()
   }
@@ -3441,7 +3513,7 @@ export class SvgCanvas {
     }
     if (this.totalSelectedCount() !== 1) return
 
-    let ownerKind: 'layer' | 'shape'
+    let ownerKind: ConnectionPointOwnerKind
     let ownerId: string
     let points: { pointId: string; pos: Point }[]
 
@@ -3463,6 +3535,16 @@ export class SvgCanvas {
       points = (shape.connectionPoints ?? [])
         .map((cp) => ({ pointId: cp.pointId, pos: getShapeConnectionPointWorldPosition(shape, cp.pointId) }))
         .filter((p): p is { pointId: string; pos: Point } => p.pos !== null)
+    } else if (this.selectedInstanceIds.length === 1) {
+      const instance = this.latestInstances.find((i) => i.instanceId === this.selectedInstanceIds[0])
+      if (!instance) return
+      const instanceLayer = this.latestLayers.find((l) => l.layerId === instance.layerId)
+      if (instanceLayer?.locked) return
+      ownerKind = 'instance'
+      ownerId = instance.instanceId
+      points = (instance.connectionPoints ?? [])
+        .map((cp) => ({ pointId: cp.pointId, pos: getInstanceConnectionPointWorldPosition(instance, cp.pointId) }))
+        .filter((p): p is { pointId: string; pos: Point } => p.pos !== null)
     } else {
       return
     }
@@ -3482,6 +3564,15 @@ export class SvgCanvas {
       c.setAttribute('data-cp-owner-id', ownerId)
       c.setAttribute('data-cp-point-id', pointId)
       c.style.cursor = 'move'
+      // The CSS class's stroke-width is a fixed world-unit value, but radius
+      // is deliberately zoom-compensated (worldThreshold) to stay a constant
+      // 5 screen px — without also scaling the stroke the same way, zooming
+      // in inflates the white border's *screen* size relative to the now
+      // world-unit-shrunk radius until it swallows the colored fill
+      // entirely. Set it inline (wins over the class rule) at the same
+      // fixed screen-px ratio the CSS otherwise implies (1.5/5 normal,
+      // 2/5 selected).
+      c.style.strokeWidth = String(this.worldThreshold(isSelected ? 2 : 1.5))
       this.connectionPointHandlesGroup.appendChild(c)
     }
   }
@@ -3582,6 +3673,7 @@ export class SvgCanvas {
     this.refreshDragHandles()
     this.refreshInstanceResizeHandles()
     this.refreshPortMarkers()
+    this.refreshConnectionPointHandles()
   }
 
   /**

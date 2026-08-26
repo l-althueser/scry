@@ -9,7 +9,7 @@ import {
   type PortRef,
 } from '@svg-editor/shared'
 import { fmt, rotatePoint } from '../library/componentUtils'
-import { getComponentType, resolvePorts } from '../library/registry'
+import { getComponentType, resolveLocalBodyCorners, resolvePorts } from '../library/registry'
 import { boundsOfPoints } from '../shapes/freeShapeGeometry'
 
 export interface Point {
@@ -61,6 +61,38 @@ export function getPortWorldPosition(instance: ComponentInstance, portId: string
   return { x: instance.transform.x + rotated.x, y: instance.transform.y + rotated.y }
 }
 
+/** portId convention for a PortRef that points at a user-placed connection point on a component instance (in addition to that type's own fixed ports) — parallel to IMAGE_POINT_PREFIX/SHAPE_POINT_PREFIX. */
+export const INSTANCE_POINT_PREFIX = 'icp:'
+
+export function instancePointPortId(pointId: string): string {
+  return `${INSTANCE_POINT_PREFIX}${pointId}`
+}
+
+/**
+ * World position of one component instance's user-placed connection point.
+ * relX/relY are fractions of the instance's local (unrotated) body bounding
+ * box (see resolveLocalBodyCorners) — deliberately not mirror-adjusted the
+ * way a fixed Port is (getPortWorldPosition): a mirrorable type's body
+ * itself is symmetric around its own mirror axis (same simplification
+ * drawSelectionConnectors already relies on for this same corner data), so
+ * mirroring the *point* the same way `mirrored: true` mirrors the body
+ * would move the marker off wherever the user actually clicked.
+ */
+export function getInstanceConnectionPointWorldPosition(instance: ComponentInstance, pointId: string): Point | null {
+  const cp = (instance.connectionPoints ?? []).find((p) => p.pointId === pointId)
+  if (!cp) return null
+  const def = getComponentType(instance.componentTypeId)
+  const corners = resolveLocalBodyCorners(def, instance)
+  if (corners.length === 0) return null
+  const minX = Math.min(...corners.map((c) => c.x))
+  const maxX = Math.max(...corners.map((c) => c.x))
+  const minY = Math.min(...corners.map((c) => c.y))
+  const maxY = Math.max(...corners.map((c) => c.y))
+  const local = { x: minX + cp.relX * (maxX - minX), y: minY + cp.relY * (maxY - minY) }
+  const rotated = rotatePoint(local, instance.transform.rotationDeg)
+  return { x: instance.transform.x + rotated.x, y: instance.transform.y + rotated.y }
+}
+
 function detachEnd(
   ref: PortRef | FreePoint,
   instances: ComponentInstance[],
@@ -68,7 +100,11 @@ function detachEnd(
 ): PortRef | FreePoint {
   if (!isPortRef(ref) || !removedInstanceIds.has(ref.instanceId)) return ref
   const inst = instances.find((i) => i.instanceId === ref.instanceId)
-  const pos = inst ? getPortWorldPosition(inst, ref.portId) : null
+  const pos = inst
+    ? ref.portId.startsWith(INSTANCE_POINT_PREFIX)
+      ? getInstanceConnectionPointWorldPosition(inst, ref.portId.slice(INSTANCE_POINT_PREFIX.length))
+      : getPortWorldPosition(inst, ref.portId)
+    : null
   return pos ?? ref
 }
 
@@ -221,7 +257,11 @@ export function resolvePortRefWorldPosition(
   if (!isPortRef(ref)) return { x: ref.x, y: ref.y }
 
   const inst = instances.find((i) => i.instanceId === ref.instanceId)
-  if (inst) return getPortWorldPosition(inst, ref.portId)
+  if (inst) {
+    return ref.portId.startsWith(INSTANCE_POINT_PREFIX)
+      ? getInstanceConnectionPointWorldPosition(inst, ref.portId.slice(INSTANCE_POINT_PREFIX.length))
+      : getPortWorldPosition(inst, ref.portId)
+  }
 
   if (ref.portId.startsWith(IMAGE_POINT_PREFIX)) {
     const layer = layers.find((l) => l.layerId === ref.instanceId)

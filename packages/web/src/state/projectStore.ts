@@ -28,8 +28,8 @@ import {
   type VectorLayer,
   type Waypoint,
 } from '@svg-editor/shared'
-import { componentHasPipeColorOption, getComponentType, rotatePoint } from '../library'
-import type { Tool, Point } from '../canvas/SvgCanvas'
+import { componentHasPipeColorOption, getComponentType, resolveLocalBodyCorners, rotatePoint } from '../library'
+import type { ConnectionPointOwnerKind, Tool, Point } from '../canvas/SvgCanvas'
 import * as api from '../api/client'
 import { exportProjectToSvg } from '../export/svgExport'
 import { downloadTextFile } from '../export/downloadFile'
@@ -773,8 +773,8 @@ interface ProjectState {
   selectedLeaderLinePoint: { leaderLineId: string; point: 'from' | 'to' | number } | null
   layers: Layer[]
   selectedLayerIds: string[]
-  /** Which connection point (on the currently selected image layer or shape) is being edited — coexists with, doesn't clear, selectedLayerIds/selectedShapeIds, same as selectedWaypoint coexisting with selectedPipeIds. */
-  selectedConnectionPoint: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null
+  /** Which connection point (on the currently selected image layer, shape, or component instance) is being edited — coexists with, doesn't clear, selectedLayerIds/selectedShapeIds/selectedInstanceIds, same as selectedWaypoint coexisting with selectedPipeIds. */
+  selectedConnectionPoint: { ownerKind: ConnectionPointOwnerKind; ownerId: string; pointId: string } | null
   groups: Group[]
   /** Non-null means the five selection arrays above currently equal exactly one group's membership, selected as a unit (see selectGroup). */
   selectedGroupId: string | null
@@ -794,6 +794,8 @@ interface ProjectState {
   connectionPointTargetLayerId: string | null
   /** Parallel to connectionPointTargetLayerId, but for the 'place-connection-point-shape' tool. */
   connectionPointTargetShapeId: string | null
+  /** Parallel to connectionPointTargetLayerId, but for the 'place-connection-point-instance' tool. */
+  connectionPointTargetInstanceId: string | null
   /** Non-null while the "pick transparent color" eyedropper tool is armed for an image layer — see pickTransparentColorAt. */
   pickTransparentColorTargetLayerId: string | null
   /** Max per-channel color difference (0-255) still counted as a match — see applyTransparentColor. 0 = exact match only. A UI setting, not per-image, so it carries over between picks like the regex-search fields do. */
@@ -1049,9 +1051,12 @@ interface ProjectState {
   /** Parallel to addConnectionPoint, but for a free shape's own connection points (relX/relY fractions of the shape's bounding box). */
   addShapeConnectionPoint: (shapeId: string, relX: number, relY: number, keepPlacing?: boolean) => void
   deleteShapeConnectionPoint: (shapeId: string, pointId: string) => void
-  selectConnectionPoint: (selection: { ownerKind: 'layer' | 'shape'; ownerId: string; pointId: string } | null) => void
+  /** Parallel to addShapeConnectionPoint, but for a component instance's own connection points (relX/relY fractions of the instance's local unrotated body bounding box) — in addition to that type's own fixed ports. */
+  addInstanceConnectionPoint: (instanceId: string, relX: number, relY: number, keepPlacing?: boolean) => void
+  deleteInstanceConnectionPoint: (instanceId: string, pointId: string) => void
+  selectConnectionPoint: (selection: { ownerKind: ConnectionPointOwnerKind; ownerId: string; pointId: string } | null) => void
   /** Live update while dragging a connection-point handle — no history push per call, checkpointed via onDragCheckpoint at drag-start like every other continuous drag. */
-  moveConnectionPoint: (ownerKind: 'layer' | 'shape', ownerId: string, pointId: string, relX: number, relY: number) => void
+  moveConnectionPoint: (ownerKind: ConnectionPointOwnerKind, ownerId: string, pointId: string, relX: number, relY: number) => void
   /** The "pick transparent color" eyedropper: samples the pixel at relX/relY (fractions of the image's footprint) and re-encodes the image with every pixel within transparentColorTolerance made transparent — one-shot, exits the tool on completion. */
   pickTransparentColorAt: (layerId: string, relX: number, relY: number) => Promise<void>
   /** Updates the tolerance; if layerId is given and that layer has a remembered pick (originalSrc + transparentColorHex), immediately re-derives src from originalSrc at the new tolerance. */
@@ -1130,6 +1135,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   drawingShapeKind: null,
   connectionPointTargetLayerId: null,
   connectionPointTargetShapeId: null,
+  connectionPointTargetInstanceId: null,
   pickTransparentColorTargetLayerId: null,
   transparentColorTolerance: 0,
   gridSize: BASE_GRID_SIZE / 8,
@@ -1627,25 +1633,60 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             ),
           }
         }
-        const shape = state.freeShapes.find((s) => s.instanceId === ownerId)
-        if (!shape) return {}
-        const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
-        const width = maxX - minX
-        const height = maxY - minY
+        if (ownerKind === 'shape') {
+          const shape = state.freeShapes.find((s) => s.instanceId === ownerId)
+          if (!shape) return {}
+          const { minX, minY, maxX, maxY } = boundsOfPoints(shape.points)
+          const width = maxX - minX
+          const height = maxY - minY
+          if (width <= 0 || height <= 0) return {}
+          const cp = (shape.connectionPoints ?? []).find((p) => p.pointId === pointId)
+          if (!cp) return {}
+          const relX = Math.max(0, Math.min(1, cp.relX + worldDelta.x / width))
+          const relY = Math.max(0, Math.min(1, cp.relY + worldDelta.y / height))
+          return {
+            ...pushHistory(state),
+            freeShapes: state.freeShapes.map((s) =>
+              s.instanceId === ownerId
+                ? {
+                    ...s,
+                    connectionPoints: (s.connectionPoints ?? []).map((p) => (p.pointId === pointId ? { ...p, relX, relY } : p)),
+                  }
+                : s,
+            ),
+          }
+        }
+        const instance = state.instances.find((i) => i.instanceId === ownerId)
+        if (!instance) return {}
+        const def = getComponentType(instance.componentTypeId)
+        const corners = resolveLocalBodyCorners(def, instance)
+        if (corners.length === 0) return {}
+        const iMinX = Math.min(...corners.map((c) => c.x))
+        const iMaxX = Math.max(...corners.map((c) => c.x))
+        const iMinY = Math.min(...corners.map((c) => c.y))
+        const iMaxY = Math.max(...corners.map((c) => c.y))
+        const width = iMaxX - iMinX
+        const height = iMaxY - iMinY
         if (width <= 0 || height <= 0) return {}
-        const cp = (shape.connectionPoints ?? []).find((p) => p.pointId === pointId)
+        const cp = (instance.connectionPoints ?? []).find((p) => p.pointId === pointId)
         if (!cp) return {}
-        const relX = Math.max(0, Math.min(1, cp.relX + worldDelta.x / width))
-        const relY = Math.max(0, Math.min(1, cp.relY + worldDelta.y / height))
+        // The instance's own body can be rotated, unlike a shape's/layer's —
+        // rotate the world nudge delta into the instance's local space first
+        // (same technique as the role nudge below) so arrow keys still move
+        // the point in the screen direction pressed, not the instance's own
+        // unrotated axes.
+        const localDelta = rotatePoint(worldDelta, -instance.transform.rotationDeg)
+        const relX = Math.max(0, Math.min(1, cp.relX + localDelta.x / width))
+        const relY = Math.max(0, Math.min(1, cp.relY + localDelta.y / height))
         return {
           ...pushHistory(state),
-          freeShapes: state.freeShapes.map((s) =>
-            s.instanceId === ownerId
+          instances: state.instances.map((i) =>
+            i.instanceId === ownerId
               ? {
-                  ...s,
-                  connectionPoints: (s.connectionPoints ?? []).map((p) => (p.pointId === pointId ? { ...p, relX, relY } : p)),
+                  ...i,
+                  connectionPoints: (i.connectionPoints ?? []).map((p) => (p.pointId === pointId ? { ...p, relX, relY } : p)),
                 }
-              : s,
+              : i,
           ),
         }
       }
@@ -1765,6 +1806,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       drawingShapeKind: tool === 'draw-shape' ? (componentTypeId as FreeShapeKind | null) : null,
       connectionPointTargetLayerId: tool === 'place-connection-point' ? componentTypeId : null,
       connectionPointTargetShapeId: tool === 'place-connection-point-shape' ? componentTypeId : null,
+      connectionPointTargetInstanceId: tool === 'place-connection-point-instance' ? componentTypeId : null,
       pickTransparentColorTargetLayerId: tool === 'pick-transparent-color' ? componentTypeId : null,
       // Switching tools deselects any selected image layers — except arming
       // the connection-point/transparent-color-pick tool from that same
@@ -1785,6 +1827,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       drawingShapeKind: null,
       connectionPointTargetLayerId: null,
       connectionPointTargetShapeId: null,
+      connectionPointTargetInstanceId: null,
       pickTransparentColorTargetLayerId: null,
     }),
 
@@ -2993,6 +3036,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ),
     })),
 
+  addInstanceConnectionPoint: (instanceId, relX, relY, keepPlacing = false) =>
+    set((state) => {
+      const point: ImageConnectionPoint = { pointId: crypto.randomUUID(), relX, relY }
+      return {
+        ...pushHistory(state),
+        instances: state.instances.map((i) =>
+          i.instanceId === instanceId ? { ...i, connectionPoints: [...(i.connectionPoints ?? []), point] } : i,
+        ),
+        tool: keepPlacing ? state.tool : 'select',
+        connectionPointTargetInstanceId: keepPlacing ? state.connectionPointTargetInstanceId : null,
+      }
+    }),
+
+  deleteInstanceConnectionPoint: (instanceId, pointId) =>
+    set((state) => ({
+      ...pushHistory(state),
+      instances: state.instances.map((i) =>
+        i.instanceId === instanceId
+          ? { ...i, connectionPoints: (i.connectionPoints ?? []).filter((p) => p.pointId !== pointId) }
+          : i,
+      ),
+    })),
+
   selectConnectionPoint: (selection) => set({ selectedConnectionPoint: selection }),
 
   moveConnectionPoint: (ownerKind, ownerId, pointId, relX, relY) =>
@@ -3013,16 +3079,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           ),
         }
       }
+      if (ownerKind === 'shape') {
+        return {
+          freeShapes: state.freeShapes.map((s) =>
+            s.instanceId === ownerId
+              ? {
+                  ...s,
+                  connectionPoints: (s.connectionPoints ?? []).map((p) =>
+                    p.pointId === pointId ? { ...p, relX: clampedX, relY: clampedY } : p,
+                  ),
+                }
+              : s,
+          ),
+        }
+      }
       return {
-        freeShapes: state.freeShapes.map((s) =>
-          s.instanceId === ownerId
+        instances: state.instances.map((i) =>
+          i.instanceId === ownerId
             ? {
-                ...s,
-                connectionPoints: (s.connectionPoints ?? []).map((p) =>
+                ...i,
+                connectionPoints: (i.connectionPoints ?? []).map((p) =>
                   p.pointId === pointId ? { ...p, relX: clampedX, relY: clampedY } : p,
                 ),
               }
-            : s,
+            : i,
         ),
       }
     }),

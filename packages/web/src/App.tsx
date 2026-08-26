@@ -164,6 +164,7 @@ export default function App() {
   const selectConnectionPoint = useProjectStore((s) => s.selectConnectionPoint)
   const deleteConnectionPoint = useProjectStore((s) => s.deleteConnectionPoint)
   const deleteShapeConnectionPoint = useProjectStore((s) => s.deleteShapeConnectionPoint)
+  const deleteInstanceConnectionPoint = useProjectStore((s) => s.deleteInstanceConnectionPoint)
   const selectInstances = useProjectStore((s) => s.selectInstances)
   const selectRole = useProjectStore((s) => s.selectRole)
   const selectPipes = useProjectStore((s) => s.selectPipes)
@@ -393,8 +394,10 @@ export default function App() {
           evt.preventDefault()
           if (selectedConnectionPoint.ownerKind === 'layer') {
             deleteConnectionPoint(selectedConnectionPoint.ownerId, selectedConnectionPoint.pointId)
-          } else {
+          } else if (selectedConnectionPoint.ownerKind === 'shape') {
             deleteShapeConnectionPoint(selectedConnectionPoint.ownerId, selectedConnectionPoint.pointId)
+          } else {
+            deleteInstanceConnectionPoint(selectedConnectionPoint.ownerId, selectedConnectionPoint.pointId)
           }
         } else if (selectedWaypoint) {
           evt.preventDefault()
@@ -456,6 +459,7 @@ export default function App() {
     selectConnectionPoint,
     deleteConnectionPoint,
     deleteShapeConnectionPoint,
+    deleteInstanceConnectionPoint,
     closeLayersPanel,
     rotateInstance,
     nudgeSelection,
