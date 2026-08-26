@@ -335,6 +335,46 @@ export function shiftPipePointRefsForDelete(
   })
 }
 
+/**
+ * Renumbers a pipe's own cornerOverrides keys (raw segment indices, see the
+ * PipeInstance.cornerOverrides doc comment) after a new waypoint is spliced
+ * in at `insertedPointIndex` — same full-point-list index space
+ * shiftPipePointRefsForInsert/the arrow renumbering in insertPipeWaypoint
+ * use. A segment entirely before the insertion point is unaffected; one
+ * entirely after shifts up by one to keep naming the same physical corner;
+ * a segment the new point falls *inside* (insertedPointIndex === segment
+ * index + 1) is dropped, since the insertion splits it into two new
+ * segments the old override doesn't meaningfully apply to.
+ */
+export function shiftCornerOverridesForInsert(
+  cornerOverrides: Record<string, 'h-first' | 'v-first'> | undefined,
+  insertedPointIndex: number,
+): Record<string, 'h-first' | 'v-first'> | undefined {
+  if (!cornerOverrides) return cornerOverrides
+  const result: Record<string, 'h-first' | 'v-first'> = {}
+  for (const [key, value] of Object.entries(cornerOverrides)) {
+    const i = Number(key)
+    if (i + 1 === insertedPointIndex) continue // new point falls inside this segment
+    result[String(i >= insertedPointIndex ? i + 1 : i)] = value
+  }
+  return result
+}
+
+/** Inverse of shiftCornerOverridesForInsert, for a point removed at `removedPointIndex`: a segment touching the removed point (either side) is dropped since it merges into a new segment; a later segment shifts down by one. */
+export function shiftCornerOverridesForDelete(
+  cornerOverrides: Record<string, 'h-first' | 'v-first'> | undefined,
+  removedPointIndex: number,
+): Record<string, 'h-first' | 'v-first'> | undefined {
+  if (!cornerOverrides) return cornerOverrides
+  const result: Record<string, 'h-first' | 'v-first'> = {}
+  for (const [key, value] of Object.entries(cornerOverrides)) {
+    const i = Number(key)
+    if (i === removedPointIndex - 1 || i === removedPointIndex) continue
+    result[String(i > removedPointIndex ? i - 1 : i)] = value
+  }
+  return result
+}
+
 export interface ResolvedPipeArrow {
   pos: Point
   rotationDeg: number
@@ -420,8 +460,16 @@ export function straightPathD(points: Point[]): string {
  * PIPE_POINT_PREFIX port refs address into it by index, so it must never be
  * reshaped, only the display copy used for drawing.
  */
-export function getDisplayPoints(pipe: Pick<PipeInstance, 'routingMode'>, points: Point[]): Point[] {
-  return pipe.routingMode === 'orthogonal' ? expandOrthogonal(points) : points
+export function getDisplayPoints(
+  pipe: Pick<PipeInstance, 'routingMode' | 'cornerOverrides'>,
+  points: Point[],
+): Point[] {
+  return pipe.routingMode === 'orthogonal' ? expandOrthogonal(points, pipe.cornerOverrides) : points
+}
+
+/** Which axis a corner bends along first, given the two raw points it sits between — the shared "larger delta wins" default used whenever no cornerOverrides entry says otherwise. */
+function defaultBendsHorizontalFirst(a: Point, b: Point): boolean {
+  return Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)
 }
 
 /**
@@ -432,7 +480,11 @@ export function getDisplayPoints(pipe: Pick<PipeInstance, 'routingMode'>, points
  * display segments. Non-orthogonal mode is the identity map (one display
  * segment per raw segment).
  */
-function expandWithOwners(points: Point[], orthogonal: boolean): { points: Point[]; owners: number[] } {
+function expandWithOwners(
+  points: Point[],
+  orthogonal: boolean,
+  cornerOverrides?: Record<string, 'h-first' | 'v-first'>,
+): { points: Point[]; owners: number[] } {
   if (points.length < 2) return { points, owners: [] }
   if (!orthogonal) {
     return { points, owners: points.slice(0, -1).map((_, i) => i) }
@@ -443,9 +495,13 @@ function expandWithOwners(points: Point[], orthogonal: boolean): { points: Point
     const a = points[i]
     const b = points[i + 1]
     if (Math.abs(a.x - b.x) > 1e-6 && Math.abs(a.y - b.y) > 1e-6) {
-      // Bend along whichever axis has the larger delta, so a short stub near
-      // a port reads as a natural first turn rather than a long detour.
-      const corner = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y) ? { x: b.x, y: a.y } : { x: a.x, y: b.y }
+      // Bend along whichever axis has the larger delta by default, so a short
+      // stub near a port reads as a natural first turn rather than a long
+      // detour — unless the user flipped this specific corner via a
+      // cornerOverrides entry.
+      const override = cornerOverrides?.[String(i)]
+      const hFirst = override ? override === 'h-first' : defaultBendsHorizontalFirst(a, b)
+      const corner = hFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y }
       result.push(corner)
       owners.push(i)
     }
@@ -456,8 +512,35 @@ function expandWithOwners(points: Point[], orthogonal: boolean): { points: Point
 }
 
 /** Inserts one right-angle corner between each pair of consecutive points that isn't already axis-aligned, so the rendered line only ever moves horizontally/vertically. */
-export function expandOrthogonal(points: Point[]): Point[] {
-  return expandWithOwners(points, true).points
+export function expandOrthogonal(points: Point[], cornerOverrides?: Record<string, 'h-first' | 'v-first'>): Point[] {
+  return expandWithOwners(points, true, cornerOverrides).points
+}
+
+export interface OrthogonalCorner {
+  pos: Point
+  /** Raw segment index (between raw points i and i+1) this corner was inserted for — the cornerOverrides key. */
+  segmentIndex: number
+  /** The direction actually rendered for this corner (override, or the default heuristic if none is set) — flip handles toggle to the other one. */
+  hFirst: boolean
+}
+
+/** Just the inserted corners for orthogonal display points, each tagged with its raw segment index — used to place per-corner flip handles. */
+export function getOrthogonalCorners(
+  points: Point[],
+  cornerOverrides?: Record<string, 'h-first' | 'v-first'>,
+): OrthogonalCorner[] {
+  if (points.length < 2) return []
+  const corners: OrthogonalCorner[] = []
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    if (Math.abs(a.x - b.x) > 1e-6 && Math.abs(a.y - b.y) > 1e-6) {
+      const override = cornerOverrides?.[String(i)]
+      const hFirst = override ? override === 'h-first' : defaultBendsHorizontalFirst(a, b)
+      corners.push({ pos: hFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y }, segmentIndex: i, hFirst })
+    }
+  }
+  return corners
 }
 
 function distSqToSegment(p: Point, a: Point, b: Point): number {
@@ -482,12 +565,16 @@ function distSqToSegment(p: Point, a: Point, b: Point): number {
  * always means `waypoints.splice(i, 0, newPoint)`).
  */
 export function findNearestPipeSegment(
-  pipe: Pick<PipeInstance, 'routingMode'>,
+  pipe: Pick<PipeInstance, 'routingMode' | 'cornerOverrides'>,
   rawPoints: Point[],
   point: Point,
 ): { insertIndex: number; distanceSq: number } | null {
   if (rawPoints.length < 2) return null
-  const { points: displayPoints, owners } = expandWithOwners(rawPoints, pipe.routingMode === 'orthogonal')
+  const { points: displayPoints, owners } = expandWithOwners(
+    rawPoints,
+    pipe.routingMode === 'orthogonal',
+    pipe.cornerOverrides,
+  )
   let best: { insertIndex: number; distanceSq: number } | null = null
   for (let i = 0; i < displayPoints.length - 1; i++) {
     const distanceSq = distSqToSegment(point, displayPoints[i], displayPoints[i + 1])

@@ -59,6 +59,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
   const finalizePipeEndpointDrag = useProjectStore((s) => s.finalizePipeEndpointDrag)
   const selectWaypoint = useProjectStore((s) => s.selectWaypoint)
   const selectEndpoint = useProjectStore((s) => s.selectEndpoint)
+  const setPipeCornerOverride = useProjectStore((s) => s.setPipeCornerOverride)
   const checkpointHistory = useProjectStore((s) => s.checkpointHistory)
   const addFreeShape = useProjectStore((s) => s.addFreeShape)
   const moveShape = useProjectStore((s) => s.moveShape)
@@ -103,6 +104,7 @@ export const CanvasView = forwardRef<CanvasViewHandle>(function CanvasView(_prop
       onEndpointSelected: (selection) => selectEndpoint(selection),
       onPipeEndpointMoved: (pipeId, side, ref) => movePipeEndpoint(pipeId, side, ref),
       onPipeEndpointDragEnd: (pipeId) => finalizePipeEndpointDrag(pipeId),
+      onCornerFlip: (pipeId, segmentIndex, mode) => setPipeCornerOverride(pipeId, segmentIndex, mode),
       onShapeAdded: (kind, points, keepDrawing) => addFreeShape(kind, points, keepDrawing),
       onShapeMoved: (shapeId, points) => moveShape(shapeId, points),
       onShapeSelectionChanged: (shapeIds) => selectShapes(shapeIds),

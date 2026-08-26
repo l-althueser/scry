@@ -40,6 +40,7 @@ import {
   findNearestPipeSegment,
   getDisplayPoints,
   getImageConnectionPointWorldPosition,
+  getOrthogonalCorners,
   getPipePoints,
   getPortWorldPosition,
   getShapeConnectionPointWorldPosition,
@@ -167,6 +168,8 @@ export interface SvgCanvasCallbacks {
   onPipeEndpointMoved: (pipeId: string, side: PipeEndpointSide, ref: PortRef | FreePoint) => void
   /** Fired once when an endpoint drag ends, so the store can recompute pipe "volumes" (topology may have changed) without doing it on every intermediate move. */
   onPipeEndpointDragEnd: (pipeId: string) => void
+  /** Clicking an orthogonal pipe's corner-flip handle — forces that bend (raw segment `segmentIndex`, see cornerOverrides) to the other side. */
+  onCornerFlip: (pipeId: string, segmentIndex: number, mode: 'h-first' | 'v-first') => void
 
   /** keepDrawing is true when Shift was held, so the tool stays active for drawing several shapes in a row. */
   onShapeAdded: (kind: FreeShapeKind, points: Point[], keepDrawing: boolean) => void
@@ -363,6 +366,7 @@ export class SvgCanvas {
   private dragHandlesGroup: SVGGElement
   private portMarkersGroup: SVGGElement
   private waypointHandlesGroup: SVGGElement
+  private cornerFlipHandlesGroup: SVGGElement
   private leaderLineHandlesGroup: SVGGElement
   private companionPointsGroup: SVGGElement
   private layerResizeHandlesGroup: SVGGElement
@@ -452,6 +456,10 @@ export class SvgCanvas {
     this.waypointHandlesGroup = document.createElementNS(SVG_NS, 'g')
     this.waypointHandlesGroup.setAttribute('class', 'gv-waypoint-handles')
     this.overlayLayer.appendChild(this.waypointHandlesGroup)
+
+    this.cornerFlipHandlesGroup = document.createElementNS(SVG_NS, 'g')
+    this.cornerFlipHandlesGroup.setAttribute('class', 'gv-corner-flip-handles')
+    this.overlayLayer.appendChild(this.cornerFlipHandlesGroup)
 
     this.leaderLineHandlesGroup = document.createElementNS(SVG_NS, 'g')
     this.leaderLineHandlesGroup.setAttribute('class', 'gv-leader-line-handles')
@@ -1683,6 +1691,7 @@ export class SvgCanvas {
     const resizeHandleEl = target.closest('[data-resize-handle]') as SVGElement | null
     const shapePointHandleEl = target.closest('[data-shape-point-index]') as SVGElement | null
     const connectionPointHandleEl = target.closest('[data-cp-point-id]') as SVGElement | null
+    const cornerFlipHandleEl = target.closest('[data-corner-segment-index]') as SVGElement | null
     const endpointEl = target.closest('[data-pipe-endpoint]') as SVGElement | null
     const waypointEl = target.closest('[data-waypoint-index]') as SVGElement | null
     const roleEl = target.closest('[data-role]') as SVGGElement | null
@@ -1757,6 +1766,22 @@ export class SvgCanvas {
       this.dragConnectionPointOwnerKind = ownerKind
       this.dragConnectionPointOwnerId = ownerId
       this.dragConnectionPointId = pointId
+      return
+    }
+
+    if (cornerFlipHandleEl) {
+      // A plain click, not a drag — flipping a corner is binary, so there's
+      // nothing to track between pointerdown and pointerup.
+      const pipeId = cornerFlipHandleEl.getAttribute('data-pipe-id')!
+      const segmentIndex = Number(cornerFlipHandleEl.getAttribute('data-corner-segment-index'))
+      const pipe = this.latestPipes.find((p) => p.instanceId === pipeId)
+      const points =
+        pipe && getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
+      const corner =
+        pipe && points && getOrthogonalCorners(points, pipe.cornerOverrides).find((c) => c.segmentIndex === segmentIndex)
+      if (corner) {
+        this.callbacks.onCornerFlip(pipeId, segmentIndex, corner.hFirst ? 'v-first' : 'h-first')
+      }
       return
     }
 
@@ -3025,6 +3050,7 @@ export class SvgCanvas {
       this.selectedEndpoint = null
     }
     this.refreshWaypointHandles()
+    this.refreshCornerFlipHandles()
   }
 
   private setShapeSelectionFromUser(shapeIds: string[]) {
@@ -3197,6 +3223,37 @@ export class SvgCanvas {
         c.setAttribute('data-pipe-endpoint', side)
         this.waypointHandlesGroup.appendChild(c)
       }
+    }
+  }
+
+  /**
+   * One small diamond marker per inserted orthogonal bend on the selected
+   * pipe — clicking it flips that corner to the other side (see
+   * setPipeCornerOverride). Only shown for a single selected pipe actually
+   * in orthogonal mode; a straight/curved/manual pipe has no bends to flip.
+   */
+  private refreshCornerFlipHandles() {
+    while (this.cornerFlipHandlesGroup.firstChild) {
+      this.cornerFlipHandlesGroup.removeChild(this.cornerFlipHandlesGroup.firstChild)
+    }
+    if (this.selectedPipeIds.length !== 1) return
+    const pipe = this.latestPipes.find((p) => p.instanceId === this.selectedPipeIds[0])
+    if (!pipe || pipe.routingMode !== 'orthogonal') return
+
+    const points = getPipePoints(pipe, this.latestInstances, this.latestPipes, this.latestLayers, this.latestShapes)
+    if (!points) return
+    const corners = getOrthogonalCorners(points, pipe.cornerOverrides)
+    const r = 5
+    for (const corner of corners) {
+      const d = document.createElementNS(SVG_NS, 'path')
+      d.setAttribute(
+        'd',
+        `M${corner.pos.x} ${corner.pos.y - r} L${corner.pos.x + r} ${corner.pos.y} L${corner.pos.x} ${corner.pos.y + r} L${corner.pos.x - r} ${corner.pos.y} Z`,
+      )
+      d.setAttribute('class', 'gv-corner-flip-handle')
+      d.setAttribute('data-pipe-id', pipe.instanceId)
+      d.setAttribute('data-corner-segment-index', String(corner.segmentIndex))
+      this.cornerFlipHandlesGroup.appendChild(d)
     }
   }
 
@@ -3665,6 +3722,7 @@ export class SvgCanvas {
       this.selectedWaypoint = null
     }
     this.refreshWaypointHandles()
+    this.refreshCornerFlipHandles()
     this.refreshCompanionPipePointHandles()
   }
 

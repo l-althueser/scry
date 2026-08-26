@@ -137,6 +137,17 @@ export interface PipeInstance {
   volumeTag?: string | null
   /** crossingId -> which of the two pipes renders the hop arc at that crossing. */
   hopOverrides: Record<string, 'self' | 'other'>
+  /**
+   * Per-corner override for orthogonal routing: forces the bend inserted at
+   * raw segment index `i` (between raw points i and i+1 — see
+   * getPipePoints) to go horizontal-first or vertical-first, instead of the
+   * default "larger delta wins" heuristic in pipeGeometry's
+   * expandWithOwners. Keyed by segment index as a string, same convention
+   * as hopOverrides' crossingId keys. Absent/empty means every corner uses
+   * the default heuristic — only touched once a corner's flip handle is
+   * clicked.
+   */
+  cornerOverrides?: Record<string, 'h-first' | 'v-first'>
   /** Arrow markers toggled on individually at specific points along this pipe — see PipeArrow. */
   arrows: PipeArrow[]
 }

@@ -48,6 +48,8 @@ import {
   resolvePortRefWorldPosition,
   SHAPE_POINT_PREFIX,
   shapePointPortId,
+  shiftCornerOverridesForDelete,
+  shiftCornerOverridesForInsert,
   shiftPipePointRefsForDelete,
   shiftPipePointRefsForInsert,
 } from '../pipes/pipeGeometry'
@@ -926,6 +928,7 @@ interface ProjectState {
   finalizePipeEndpointDrag: (pipeId: string) => void
   /** winner is relative to pipeId: 'self' = pipeId hops at this crossing, 'other' = the crossing pipe does, null = clear the override (back to the default larger-id-hops rule). */
   setHopOverride: (pipeId: string, otherPipeId: string, crossingId: string, winner: 'self' | 'other' | null) => void
+  setPipeCornerOverride: (pipeId: string, segmentIndex: number, mode: 'h-first' | 'v-first') => void
   /** Grid A* re-route around other components' bounding boxes; replaces the pipe's waypoints and switches it to 'orthogonal' mode. Sets routeError if no path is found. */
   autoRoutePipe: (pipeId: string) => void
   selectPipes: (pipeIds: string[]) => void
@@ -2031,6 +2034,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               arrows: (p.arrows ?? []).map((a) =>
                 a.pointIndex >= insertedPointIndex ? { ...a, pointIndex: a.pointIndex + 1 } : a,
               ),
+              cornerOverrides: shiftCornerOverridesForInsert(p.cornerOverrides, insertedPointIndex),
             }
           : p,
       )
@@ -2074,6 +2078,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
                 arrows: (p.arrows ?? [])
                   .filter((a) => a.pointIndex !== removedPointIndex)
                   .map((a) => (a.pointIndex > removedPointIndex ? { ...a, pointIndex: a.pointIndex - 1 } : a)),
+                cornerOverrides: shiftCornerOverridesForDelete(p.cornerOverrides, removedPointIndex),
               }
             : p,
       )
@@ -2123,6 +2128,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }
         return p
       }),
+    })),
+
+  setPipeCornerOverride: (pipeId, segmentIndex, mode) =>
+    set((state) => ({
+      ...pushHistory(state),
+      pipes: state.pipes.map((p) =>
+        p.instanceId === pipeId
+          ? { ...p, cornerOverrides: { ...(p.cornerOverrides ?? {}), [String(segmentIndex)]: mode } }
+          : p,
+      ),
     })),
 
   autoRoutePipe: (pipeId) =>

@@ -705,6 +705,16 @@ body {
   r: 4.5;
 }
 
+/* Diamond marker at each inserted orthogonal corner — distinct shape from
+   the round waypoint/endpoint handles since clicking it doesn't drag
+   anything, it flips which side the bend goes on. */
+.gv-corner-flip-handle {
+  fill: #f59e0b;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
 /* Gray/dashed, deliberately distinct from pipes (blue/solid) — a leader
    line is a plain annotation pointer, not part of the process topology. */
 .gv-leader-line {
