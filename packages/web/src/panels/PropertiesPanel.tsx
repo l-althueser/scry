@@ -11,7 +11,7 @@ import {
   computeCrossingsForPipe,
   computeDefaultArrowRotation,
   DEFAULT_ARROW_SIZE,
-  getDisplayPoints,
+  getDisplayPointsWithRealness,
   getPipePoints,
   PIPE_DEFAULT_COLOR,
   resolveIndicatorTag,
@@ -554,17 +554,24 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   // Display-point map (per pipe's own routing mode) for crossing detection —
   // mirrors what SvgCanvas/pipeExport actually render, so the "Crossings"
   // list below matches what's visible on the canvas.
-  const displayPointsByPipe = useMemo(() => {
-    const map = new Map<string, Point[]>()
+  const { displayPointsByPipe, realnessByPipe } = useMemo(() => {
+    const points = new Map<string, Point[]>()
+    const real = new Map<string, boolean[]>()
     for (const p of pipes) {
       const pts = getPipePoints(p, instances, pipes, layers, freeShapes)
-      if (pts) map.set(p.instanceId, getDisplayPoints(p, pts))
+      if (pts) {
+        const withRealness = getDisplayPointsWithRealness(p, pts)
+        points.set(p.instanceId, withRealness.points)
+        real.set(p.instanceId, withRealness.real)
+      }
     }
-    return map
+    return { displayPointsByPipe: points, realnessByPipe: real }
   }, [pipes, instances, layers, freeShapes])
 
   const crossings =
-    pipe && pipe.routingMode !== 'curved' ? computeCrossingsForPipe(pipe.instanceId, pipes, displayPointsByPipe) : []
+    pipe && pipe.routingMode !== 'curved'
+      ? computeCrossingsForPipe(pipe.instanceId, pipes, displayPointsByPipe, realnessByPipe)
+      : []
 
   // Checked before every other selection-category branch below: a group
   // selection means the four selection arrays currently equal exactly one

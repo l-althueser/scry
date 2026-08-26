@@ -504,7 +504,36 @@ export function getDisplayPoints(
   pipe: Pick<PipeInstance, 'routingMode' | 'cornerOverrides'>,
   points: Point[],
 ): Point[] {
-  return pipe.routingMode === 'orthogonal' ? expandOrthogonal(points, pipe.cornerOverrides) : points
+  return getDisplayPointsWithRealness(pipe, points).points
+}
+
+/**
+ * Same display points as getDisplayPoints, paired with a parallel `real`
+ * array: true where a display point is an actual raw pipe point (a
+ * fromPort/waypoint/toPort — the only kind of point a "pt:N" PortRef can
+ * ever target), false where it's a synthetic corner orthogonal mode
+ * inserted purely for rendering. Crossing detection (findCrossingsForPipe)
+ * needs this distinction: a touch near one segment's endpoint should only
+ * be treated as "not a real crossing" (a shared connection/branch, which
+ * can only ever land on a real point) when that endpoint actually is one —
+ * an orthogonal corner landing exactly on another pipe's line is a
+ * genuine crossing, not a connection, even though it has the same
+ * near-endpoint t/u signature a real branch would.
+ */
+export function getDisplayPointsWithRealness(
+  pipe: Pick<PipeInstance, 'routingMode' | 'cornerOverrides'>,
+  points: Point[],
+): { points: Point[]; real: boolean[] } {
+  if (pipe.routingMode !== 'orthogonal') return { points, real: points.map(() => true) }
+  const { points: displayPoints, owners } = expandWithOwners(points, true, pipe.cornerOverrides)
+  const real = displayPoints.map((_, k) => {
+    if (k === 0 || k === displayPoints.length - 1) return true
+    // A synthetic corner sits between two display segments split out of the
+    // SAME raw segment (equal owners); a real raw point is always the
+    // boundary between two DIFFERENT raw segments.
+    return owners[k - 1] !== owners[k]
+  })
+  return { points: displayPoints, real }
 }
 
 /** Which axis a corner bends along first, given the two raw points it sits between — the shared "larger delta wins" default used whenever no cornerOverrides entry says otherwise. */
@@ -709,9 +738,11 @@ function findCrossingsForPipe(
   pipeId: string,
   allPipes: PipeInstance[],
   pointsByPipe: Map<string, Point[]>,
+  realnessByPipe: Map<string, boolean[]>,
 ): RawCrossing[] {
   const myPoints = pointsByPipe.get(pipeId)
-  if (!myPoints) return []
+  const myReal = realnessByPipe.get(pipeId)
+  if (!myPoints || !myReal) return []
   const crossings: RawCrossing[] = []
 
   for (let segIdx = 0; segIdx < myPoints.length - 1; segIdx++) {
@@ -721,10 +752,20 @@ function findCrossingsForPipe(
     for (const other of allPipes) {
       if (other.instanceId === pipeId) continue
       const otherPoints = pointsByPipe.get(other.instanceId)
-      if (!otherPoints) continue
+      const otherReal = realnessByPipe.get(other.instanceId)
+      if (!otherPoints || !otherReal) continue
 
       for (let oIdx = 0; oIdx < otherPoints.length - 1; oIdx++) {
-        const hit = segmentIntersection(a, b, otherPoints[oIdx], otherPoints[oIdx + 1])
+        const hit = segmentIntersection(
+          a,
+          b,
+          otherPoints[oIdx],
+          otherPoints[oIdx + 1],
+          myReal[segIdx],
+          myReal[segIdx + 1],
+          otherReal[oIdx],
+          otherReal[oIdx + 1],
+        )
         if (!hit) continue
         crossings.push({
           id: crossingId(pipeId, segIdx, other.instanceId, oIdx),
@@ -763,9 +804,10 @@ export function computeHopsForPipe(
   pipeId: string,
   allPipes: PipeInstance[],
   pointsByPipe: Map<string, Point[]>,
+  realnessByPipe: Map<string, boolean[]>,
 ): HopPoint[] {
   const pipesById = new Map(allPipes.map((p) => [p.instanceId, p]))
-  return findCrossingsForPipe(pipeId, allPipes, pointsByPipe)
+  return findCrossingsForPipe(pipeId, allPipes, pointsByPipe, realnessByPipe)
     .filter((c) => resolveHop(pipeId, c.otherPipeId, c.id, pipesById).hops)
     .map((c) => ({ point: c.point, segmentIndex: c.segmentIndex }))
 }
@@ -785,9 +827,10 @@ export function computeCrossingsForPipe(
   pipeId: string,
   allPipes: PipeInstance[],
   pointsByPipe: Map<string, Point[]>,
+  realnessByPipe: Map<string, boolean[]>,
 ): PipeCrossing[] {
   const pipesById = new Map(allPipes.map((p) => [p.instanceId, p]))
-  return findCrossingsForPipe(pipeId, allPipes, pointsByPipe).map((c) => {
+  return findCrossingsForPipe(pipeId, allPipes, pointsByPipe, realnessByPipe).map((c) => {
     const r = resolveHop(pipeId, c.otherPipeId, c.id, pipesById)
     return { id: c.id, otherPipeId: c.otherPipeId, point: c.point, hopsHere: r.hops, overridden: r.overridden }
   })
@@ -797,8 +840,29 @@ function dist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
-/** Proper interior crossing only — near-endpoint "intersections" (shared ports etc.) are ignored. */
-function segmentIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point | null {
+/** How close t/u can be to 0 or 1 and still count as "at that endpoint" for the real-point exclusion below. */
+const NEAR_ENDPOINT_T = 0.02
+
+/**
+ * Proper interior crossing only — a touch near one segment's endpoint is
+ * excluded ONLY when that endpoint is a real pipe point (p*Real true: a raw
+ * fromPort/waypoint/toPort, the only kind of point a "pt:N" PortRef can
+ * ever target), since that's the shape a genuine shared connection/branch
+ * takes. A synthetic orthogonal-mode corner (p*Real false) touching another
+ * pipe's line at the same near-endpoint t/u is a real crossing, not a
+ * connection — corners can never be a "pt:" attachment target, so they
+ * can't actually be where two pipes join.
+ */
+function segmentIntersection(
+  p1: Point,
+  p2: Point,
+  p3: Point,
+  p4: Point,
+  p1Real: boolean,
+  p2Real: boolean,
+  p3Real: boolean,
+  p4Real: boolean,
+): Point | null {
   const d1x = p2.x - p1.x
   const d1y = p2.y - p1.y
   const d2x = p4.x - p3.x
@@ -808,7 +872,11 @@ function segmentIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point 
 
   const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / denom
   const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / denom
-  if (t <= 0.02 || t >= 0.98 || u <= 0.02 || u >= 0.98) return null
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null
+  if (t <= NEAR_ENDPOINT_T && p1Real) return null
+  if (t >= 1 - NEAR_ENDPOINT_T && p2Real) return null
+  if (u <= NEAR_ENDPOINT_T && p3Real) return null
+  if (u >= 1 - NEAR_ENDPOINT_T && p4Real) return null
 
   return { x: p1.x + t * d1x, y: p1.y + t * d1y }
 }

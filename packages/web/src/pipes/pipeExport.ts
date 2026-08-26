@@ -34,6 +34,7 @@ export function exportPipeInstance(
   allPipes: PipeInstance[],
   pointsByPipe: Map<string, Point[]>,
   displayPointsByPipe: Map<string, Point[]>,
+  realnessByPipe: Map<string, boolean[]>,
   isNameLabelPipe: boolean,
 ): string[] {
   const points = pointsByPipe.get(pipe.instanceId)
@@ -47,7 +48,10 @@ export function exportPipeInstance(
   const d =
     pipe.routingMode === 'curved'
       ? curvedPathD(points)
-      : straightPathDWithHops(displayPoints, computeHopsForPipe(pipe.instanceId, allPipes, displayPointsByPipe))
+      : straightPathDWithHops(
+          displayPoints,
+          computeHopsForPipe(pipe.instanceId, allPipes, displayPointsByPipe, realnessByPipe),
+        )
 
   const color = escapeXml(resolvePipeColor(pipe))
   const idAttr = pipe.indicatorEnabled ? ` id="${escapeXml(resolveIndicatorTag(pipe))}_pipe"` : ''

@@ -10,7 +10,7 @@ import {
 import { exportLeaderLine } from '../leaderLines/leaderLineExport'
 import { getLeaderLinePoints } from '../leaderLines/leaderLineGeometry'
 import { exportPipeInstance } from '../pipes/pipeExport'
-import { getDisplayPoints, getPipePoints, type Point } from '../pipes/pipeGeometry'
+import { getDisplayPointsWithRealness, getPipePoints, type Point } from '../pipes/pipeGeometry'
 import { computeNameLabelPipeIds } from '../pipes/pipeVolumes'
 import { exportFreeShape } from '../shapes/freeShapeExport'
 import { boundsOfPoints } from '../shapes/freeShapeGeometry'
@@ -70,11 +70,14 @@ export function exportProjectToSvg(
   // no layers array at all) falls back to rendering alongside 'default'.
   const pointsByPipe = new Map<string, Point[]>()
   const displayPointsByPipe = new Map<string, Point[]>()
+  const realnessByPipe = new Map<string, boolean[]>()
   for (const pipe of pipes) {
     const pts = getPipePoints(pipe, instances, pipes, layers, freeShapes)
     if (pts) {
       pointsByPipe.set(pipe.instanceId, pts)
-      displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
+      const { points: displayPts, real } = getDisplayPointsWithRealness(pipe, pts)
+      displayPointsByPipe.set(pipe.instanceId, displayPts)
+      realnessByPipe.set(pipe.instanceId, real)
     }
   }
   const nameLabelPipeIds = computeNameLabelPipeIds(pipes)
@@ -84,7 +87,14 @@ export function exportProjectToSvg(
   const exportPipesAndInstances = () => {
     for (const pipe of pipes) {
       lines.push(
-        ...exportPipeInstance(pipe, pipes, pointsByPipe, displayPointsByPipe, nameLabelPipeIds.has(pipe.instanceId)),
+        ...exportPipeInstance(
+          pipe,
+          pipes,
+          pointsByPipe,
+          displayPointsByPipe,
+          realnessByPipe,
+          nameLabelPipeIds.has(pipe.instanceId),
+        ),
       )
     }
     for (const inst of instances) {

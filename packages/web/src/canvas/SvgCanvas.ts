@@ -38,7 +38,7 @@ import {
   computeHopsForPipe,
   curvedPathD,
   findNearestPipeSegment,
-  getDisplayPoints,
+  getDisplayPointsWithRealness,
   getImageConnectionPointWorldPosition,
   getInstanceConnectionPointWorldPosition,
   getOrthogonalCorners,
@@ -3695,11 +3695,14 @@ export class SvgCanvas {
     const seen = new Set<string>()
     const pointsByPipe = new Map<string, Point[]>()
     const displayPointsByPipe = new Map<string, Point[]>()
+    const realnessByPipe = new Map<string, boolean[]>()
     for (const pipe of pipes) {
       const pts = getPipePoints(pipe, instances, pipes, this.latestLayers, freeShapes)
       if (pts) {
         pointsByPipe.set(pipe.instanceId, pts)
-        displayPointsByPipe.set(pipe.instanceId, getDisplayPoints(pipe, pts))
+        const { points: displayPts, real } = getDisplayPointsWithRealness(pipe, pts)
+        displayPointsByPipe.set(pipe.instanceId, displayPts)
+        realnessByPipe.set(pipe.instanceId, real)
       }
     }
     const nameLabelPipeIds = computeNameLabelPipeIds(pipes)
@@ -3760,7 +3763,7 @@ export class SvgCanvas {
           ? curvedPathD(points)
           : straightPathDWithHops(
               displayPoints,
-              computeHopsForPipe(pipe.instanceId, pipes, displayPointsByPipe),
+              computeHopsForPipe(pipe.instanceId, pipes, displayPointsByPipe, realnessByPipe),
             )
       linePath.setAttribute('d', d)
       hitPath.setAttribute('d', d)
