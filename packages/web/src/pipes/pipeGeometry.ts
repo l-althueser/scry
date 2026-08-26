@@ -704,8 +704,18 @@ export function straightPathDWithHops(points: Point[], hops: HopPoint[]): string
     const uy = dy / len
 
     for (const hop of segHops) {
-      const before = { x: hop.x - ux * HOP_RADIUS, y: hop.y - uy * HOP_RADIUS }
-      const after = { x: hop.x + ux * HOP_RADIUS, y: hop.y + uy * HOP_RADIUS }
+      // Clamped to this segment's own bounds rather than placed a flat
+      // HOP_RADIUS on either side of the hop point — a hop sitting at (or
+      // very near) a shared vertex with the next/previous segment
+      // (dedupeCornerCrossings picks exactly one side for those) would
+      // otherwise overshoot past that vertex into the neighboring segment,
+      // then have to draw a short backtrack to reach it, showing up as a
+      // small tangled loop right at the corner instead of a clean gap.
+      const distFromA = dist(a, hop)
+      const beforeDist = Math.max(0, distFromA - HOP_RADIUS)
+      const afterDist = Math.min(len, distFromA + HOP_RADIUS)
+      const before = { x: a.x + ux * beforeDist, y: a.y + uy * beforeDist }
+      const after = { x: a.x + ux * afterDist, y: a.y + uy * afterDist }
       d += ` L${fmt(before.x)} ${fmt(before.y)}`
       d += ` A${HOP_RADIUS} ${HOP_RADIUS} 0 0 1 ${fmt(after.x)} ${fmt(after.y)}`
     }
@@ -776,7 +786,57 @@ function findCrossingsForPipe(
       }
     }
   }
-  return crossings
+  return dedupeCornerCrossings(crossings, myPoints)
+}
+
+/**
+ * A crossing that lands exactly on a synthetic orthogonal corner is found
+ * twice — once via the segment ending at the corner, once via the segment
+ * starting there — since both "see" the same physical point (see the
+ * realness-based relaxation in segmentIntersection, which is what allows
+ * either of these through in the first place). Rendered as-is, each would
+ * try to draw its own arc bump right at that shared vertex and stomp on the
+ * other, or overshoot past it into the neighboring segment (see the clamp
+ * in straightPathDWithHops). Collapse the pair down to one, keeping
+ * whichever of the two segments has more straight room around the hop
+ * point to actually draw the bump in — otherwise the arc has nowhere to go
+ * and the "crossing" ends up invisible or a tangled knot instead of a clean
+ * gap.
+ */
+function dedupeCornerCrossings(crossings: RawCrossing[], myPoints: Point[]): RawCrossing[] {
+  const EPS = 1e-6
+  const skip = new Set<number>()
+  const kept: RawCrossing[] = []
+  for (let i = 0; i < crossings.length; i++) {
+    if (skip.has(i)) continue
+    const c = crossings[i]
+    let winner = c
+    for (let j = i + 1; j < crossings.length; j++) {
+      if (skip.has(j)) continue
+      const d = crossings[j]
+      if (
+        d.otherPipeId !== winner.otherPipeId ||
+        Math.abs(d.segmentIndex - winner.segmentIndex) !== 1 ||
+        Math.abs(d.point.x - winner.point.x) > EPS ||
+        Math.abs(d.point.y - winner.point.y) > EPS
+      ) {
+        continue
+      }
+      skip.add(j)
+      if (segmentRoomAroundHop(myPoints, d.segmentIndex, d.point) > segmentRoomAroundHop(myPoints, winner.segmentIndex, winner.point)) {
+        winner = d
+      }
+    }
+    kept.push(winner)
+  }
+  return kept
+}
+
+/** How much straight run a segment has on its roomier side of a hop point sitting on (or very near) one of its own endpoints — the side the arc bump actually has space to draw in. */
+function segmentRoomAroundHop(points: Point[], segmentIndex: number, hop: Point): number {
+  const a = points[segmentIndex]
+  const b = points[segmentIndex + 1]
+  return Math.max(dist(a, hop), dist(b, hop))
 }
 
 /**
@@ -840,18 +900,30 @@ function dist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
-/** How close t/u can be to 0 or 1 and still count as "at that endpoint" for the real-point exclusion below. */
-const NEAR_ENDPOINT_T = 0.02
+/**
+ * How close a crossing point can land to a *real* endpoint (world units)
+ * and still count as "actually at that point" for the exclusion below — a
+ * genuine shared connection resolves both sides through the exact same
+ * PortRef target, so it lands bit-for-bit on top of the endpoint; anything
+ * farther than this is a coincidental near-miss, not a connection, however
+ * close it happens to look. Deliberately a tiny absolute distance rather
+ * than a fraction of segment length: a length-relative threshold (the
+ * previous approach) scales with how long the segment happens to be, so
+ * the exact same few-tenths-of-a-unit near-miss could get wrongly excluded
+ * on a short segment while passing fine on a long one — real connections
+ * don't care about segment length at all, they're either the same point or
+ * they're not.
+ */
+const COINCIDENT_POINT_EPS = 0.05
 
 /**
- * Proper interior crossing only — a touch near one segment's endpoint is
- * excluded ONLY when that endpoint is a real pipe point (p*Real true: a raw
- * fromPort/waypoint/toPort, the only kind of point a "pt:N" PortRef can
- * ever target), since that's the shape a genuine shared connection/branch
- * takes. A synthetic orthogonal-mode corner (p*Real false) touching another
- * pipe's line at the same near-endpoint t/u is a real crossing, not a
- * connection — corners can never be a "pt:" attachment target, so they
- * can't actually be where two pipes join.
+ * Proper interior crossing only — a touch that lands ON one segment's real
+ * endpoint (p*Real true: a raw fromPort/waypoint/toPort, the only kind of
+ * point a "pt:N" PortRef can ever target) is excluded, since that's what a
+ * genuine shared connection/branch looks like geometrically. A synthetic
+ * orthogonal-mode corner (p*Real false) touching another pipe's line at the
+ * same spot is a real crossing, not a connection — corners can never be a
+ * "pt:" attachment target, so they can't actually be where two pipes join.
  */
 function segmentIntersection(
   p1: Point,
@@ -873,10 +945,12 @@ function segmentIntersection(
   const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / denom
   const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / denom
   if (t < 0 || t > 1 || u < 0 || u > 1) return null
-  if (t <= NEAR_ENDPOINT_T && p1Real) return null
-  if (t >= 1 - NEAR_ENDPOINT_T && p2Real) return null
-  if (u <= NEAR_ENDPOINT_T && p3Real) return null
-  if (u >= 1 - NEAR_ENDPOINT_T && p4Real) return null
 
-  return { x: p1.x + t * d1x, y: p1.y + t * d1y }
+  const hit = { x: p1.x + t * d1x, y: p1.y + t * d1y }
+  if (p1Real && dist(hit, p1) <= COINCIDENT_POINT_EPS) return null
+  if (p2Real && dist(hit, p2) <= COINCIDENT_POINT_EPS) return null
+  if (p3Real && dist(hit, p3) <= COINCIDENT_POINT_EPS) return null
+  if (p4Real && dist(hit, p4) <= COINCIDENT_POINT_EPS) return null
+
+  return hit
 }
