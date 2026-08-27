@@ -1291,15 +1291,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   renameInstance: (instanceId, newTag) =>
     set((state) => {
       const trimmed = newTag.trim()
-      if (!TAG_PATTERN.test(trimmed)) {
-        return { tagRenameError: 'Tag must start with a letter (e.g. V1, HV208).' }
-      }
+      // Format violations are allowed through too (just warned about, not
+      // blocked) — same as duplicates below, since Node-RED's tag regex is
+      // stricter than what we can practically enforce here and the user may
+      // have a good reason to deviate.
+      const formatError = TAG_PATTERN.test(trimmed) ? null : 'Tag must start with a letter (e.g. V1, HV208).'
       // Duplicates are allowed (e.g. deliberately sharing a tag across a
       // couple of instances) — the properties panel warns about it instead
       // of blocking it, see duplicateInstanceTagCount in PropertiesPanel.tsx.
       return {
         ...pushHistory(state),
-        tagRenameError: null,
+        tagRenameError: formatError,
         instances: state.instances.map((inst) =>
           inst.instanceId === instanceId ? { ...inst, tag: trimmed } : inst,
         ),
@@ -1960,9 +1962,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   renamePipeTag: (pipeId, newTag) =>
     set((state) => {
       const trimmed = newTag.trim()
-      if (!TAG_PATTERN.test(trimmed)) {
-        return { tagRenameError: 'Tag must start with a letter (e.g. L1).' }
-      }
+      const formatError = TAG_PATTERN.test(trimmed) ? null : 'Tag must start with a letter (e.g. L1).'
       const conflict =
         state.pipes.some((p) => p.tag === trimmed && p.instanceId !== pipeId) ||
         state.instances.some((inst) => inst.tag === trimmed)
@@ -1971,7 +1971,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
       return {
         ...pushHistory(state),
-        tagRenameError: null,
+        tagRenameError: formatError,
         pipes: state.pipes.map((p) => (p.instanceId === pipeId ? { ...p, tag: trimmed } : p)),
       }
     }),
@@ -1980,13 +1980,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   renameVolumeTag: (pipeId, newTag) =>
     set((state) => {
       const trimmed = newTag.trim()
-      if (!TAG_PATTERN.test(trimmed)) {
-        return { tagRenameError: 'Tag must start with a letter (e.g. LV1).' }
-      }
+      const formatError = TAG_PATTERN.test(trimmed) ? null : 'Tag must start with a letter (e.g. LV1).'
       const pipe = state.pipes.find((p) => p.instanceId === pipeId)
       if (!pipe) return {}
       const oldTag = pipe.volumeTag
-      if (trimmed === oldTag) return { tagRenameError: null }
+      if (trimmed === oldTag) return { tagRenameError: formatError }
       const conflict =
         state.instances.some((inst) => inst.tag === trimmed) ||
         state.pipes.some((p) => p.tag === trimmed) ||
@@ -1996,7 +1994,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
       return {
         ...pushHistory(state),
-        tagRenameError: null,
+        tagRenameError: formatError,
         pipes: state.pipes.map((p) => (p.volumeTag === oldTag ? { ...p, volumeTag: trimmed } : p)),
       }
     }),

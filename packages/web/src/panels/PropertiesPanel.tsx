@@ -448,8 +448,19 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
     ? instances.filter((i) => i.tag === instance.tag).length
     : 0
 
+  // Derived (not from the transient tagRenameError store field) so a
+  // format-rule-breaking tag keeps showing its warning every time the
+  // object is reselected, not just right after the edit that introduced it —
+  // renameInstance/renamePipeTag/renameVolumeTag apply the tag either way
+  // (see projectStore.ts), tagRenameError just clears on most other actions.
+  const instanceTagFormatWarning =
+    instance && !TAG_PATTERN.test(instance.tag) ? 'Tag must start with a letter (e.g. V1, HV208).' : null
+
   const selectedPipes = pipes.filter((p) => selectedPipeIds.includes(p.instanceId))
   const pipe = selectedPipes.length === 1 ? selectedPipes[0] : undefined
+  const pipeTagFormatWarning = pipe && !TAG_PATTERN.test(pipe.tag) ? 'Tag must start with a letter (e.g. L1).' : null
+  const volumeTagFormatWarning =
+    pipe?.volumeTag && !TAG_PATTERN.test(pipe.volumeTag) ? 'Tag must start with a letter (e.g. LV1).' : null
 
   const selectedShapes = freeShapes.filter((s) => selectedShapeIds.includes(s.instanceId))
   const shape = selectedShapes.length === 1 ? selectedShapes[0] : undefined
@@ -725,7 +736,9 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               }}
             />
           </label>
-          {tagRenameError && <p className="field-error">{tagRenameError}</p>}
+          {(tagRenameError || pipeTagFormatWarning) && (
+            <p className="field-error">{tagRenameError ?? pipeTagFormatWarning}</p>
+          )}
 
           <label className="field">
             <span>
@@ -746,6 +759,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
               }}
             />
           </label>
+          {!tagRenameError && volumeTagFormatWarning && <p className="field-error">{volumeTagFormatWarning}</p>}
         </fieldset>
 
         <fieldset className="field roles-field">
@@ -1812,8 +1826,10 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
             }}
           />
         </label>
-        {tagRenameError && <p className="field-error">{tagRenameError}</p>}
-        {!tagRenameError && duplicateInstanceTagCount > 1 && (
+        {(tagRenameError || instanceTagFormatWarning) && (
+          <p className="field-error">{tagRenameError ?? instanceTagFormatWarning}</p>
+        )}
+        {!tagRenameError && !instanceTagFormatWarning && duplicateInstanceTagCount > 1 && (
           <p className="field-warning">Tag "{instance.tag}" is used by {duplicateInstanceTagCount} instances.</p>
         )}
 
