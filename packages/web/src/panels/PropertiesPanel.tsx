@@ -383,6 +383,7 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
   const setShapeText = useProjectStore((s) => s.setShapeText)
   const setShapeFontSize = useProjectStore((s) => s.setShapeFontSize)
   const setShapeTextAlign = useProjectStore((s) => s.setShapeTextAlign)
+  const setShapeRotation = useProjectStore((s) => s.setShapeRotation)
   const resizeShape = useProjectStore((s) => s.resizeShape)
   const deleteShapes = useProjectStore((s) => s.deleteShapes)
   const selectedLayerIds = useProjectStore((s) => s.selectedLayerIds)
@@ -1045,6 +1046,15 @@ export function PropertiesPanel({ onFocusResult }: { onFocusResult: (point: Poin
                   <option value="center">Center</option>
                   <option value="right">Right</option>
                 </select>
+              </label>
+              <label className="field">
+                <span>Rotation</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={shape.rotationDeg ?? 0}
+                  onChange={(e) => setShapeRotation(shape.instanceId, Number(e.target.value) || 0)}
+                />
               </label>
             </div>
           </fieldset>

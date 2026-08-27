@@ -264,6 +264,8 @@ export interface FreeShape {
   fontSize?: number
   /** Only meaningful for kind: 'text'. Undefined = 'left' (the original, only-ever behavior — kept optional so existing saved projects still load with their prior appearance). */
   textAlign?: TextAlign
+  /** Only meaningful for kind: 'text'. Rotation in degrees around the shape's anchor point (`points[0]`). Undefined/0 = unrotated. */
+  rotationDeg?: number
   style: FreeShapeStyle
   /** Pipes can connect to these — relX/relY fractions of the shape's own bounding box, same convention as ImageConnectionPoint (reused as-is despite the name; it's generic). Optional/defaults to [] so existing saved projects without any still load. */
   connectionPoints?: ImageConnectionPoint[]

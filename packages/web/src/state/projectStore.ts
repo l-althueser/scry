@@ -953,6 +953,7 @@ interface ProjectState {
   setShapeText: (shapeId: string, text: string) => void
   setShapeFontSize: (shapeId: string, fontSize: number) => void
   setShapeTextAlign: (shapeId: string, textAlign: TextAlign) => void
+  setShapeRotation: (shapeId: string, rotationDeg: number) => void
   selectShapes: (shapeIds: string[]) => void
 
   /** Adds a finished leader line from a completed draw-tool interaction (from/waypoints/to already resolved by the canvas). */
@@ -2336,6 +2337,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       ...pushHistory(state),
       freeShapes: state.freeShapes.map((s) => (s.instanceId === shapeId ? { ...s, textAlign } : s)),
+    })),
+
+  setShapeRotation: (shapeId, rotationDeg) =>
+    set((state) => ({
+      ...pushHistory(state),
+      freeShapes: state.freeShapes.map((s) => (s.instanceId === shapeId ? { ...s, rotationDeg } : s)),
     })),
 
   selectShapes: (shapeIds) =>

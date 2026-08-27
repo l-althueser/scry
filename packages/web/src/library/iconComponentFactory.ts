@@ -23,6 +23,8 @@ import { registerComponentType, type InstanceOptionDescriptor } from './registry
 export interface PathShape {
   d: string
   strokeWidth?: number
+  /** Only meaningful for outlineExtras — a fixed fill (e.g. a solid-black actuator housing), unlike indicatorShapes whose fill is dynamic. Undefined = 'none' (the default, unfilled outline). */
+  fill?: string
 }
 
 /** An imported raster/SVG image used as the body's base artwork — src is a data URI (client-side only, no asset pipeline). Positioned in the same local (unrotated) coordinate space as everything else on the body. Purely decorative like outlineExtras: an `<image>` can't be recolored via `fill` the way a path can, so it's never part of the indicator silhouette. */
@@ -259,7 +261,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     for (const shape of spec.outlineExtras ?? []) {
       const path = document.createElementNS(SVG_NS, 'path')
       path.setAttribute('d', shape.d)
-      path.setAttribute('fill', 'none')
+      path.setAttribute('fill', shape.fill ?? 'none')
       path.setAttribute('stroke', '#000000')
       path.setAttribute('stroke-width', String(shape.strokeWidth ?? 1.5))
       extrasOutlineGroup.appendChild(path)
@@ -404,7 +406,7 @@ export function registerIconComponentType(spec: IconComponentSpec): void {
     }
     for (const shape of spec.outlineExtras ?? []) {
       lines.push(
-        `      <path d="${shape.d}" fill="none" stroke="#000000" stroke-width="${shape.strokeWidth ?? 1.5}" />`,
+        `      <path d="${shape.d}" fill="${shape.fill ?? 'none'}" stroke="#000000" stroke-width="${shape.strokeWidth ?? 1.5}" />`,
       )
     }
     if (pipeStubs.length > 0) {

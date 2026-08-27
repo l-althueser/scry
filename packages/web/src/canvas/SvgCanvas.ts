@@ -4041,6 +4041,7 @@ export class SvgCanvas {
 
   private renderShapeInto(group: SVGGElement, shape: FreeShape, locked = false) {
     while (group.firstChild) group.removeChild(group.firstChild)
+    group.removeAttribute('transform')
     const fill = shape.style.fill ?? 'none'
     const hitPointerEvents = locked ? 'none' : 'all'
 
@@ -4139,6 +4140,10 @@ export class SvgCanvas {
         el.appendChild(tspan)
       })
       group.appendChild(el)
+
+      if (shape.rotationDeg) {
+        group.setAttribute('transform', `rotate(${fmt(shape.rotationDeg)} ${fmt(a.x)} ${fmt(a.y)})`)
+      }
     }
 
     group.classList.toggle('gv-selected', this.selectedShapeIds.includes(shape.instanceId))

@@ -47,8 +47,9 @@ export function exportFreeShape(shape: FreeShape): string[] {
       const tspans = splitTextLines(shape.text)
         .map((line, i) => `<tspan x="${fmt(a.x)}" y="${fmt(a.y + i * lineHeight)}">${escapeXml(line)}</tspan>`)
         .join('')
+      const transform = shape.rotationDeg ? ` transform="rotate(${fmt(shape.rotationDeg)} ${fmt(a.x)} ${fmt(a.y)})"` : ''
       return [
-        `    <text font-family="Arial" font-size="${fmt(fontSize)}" text-anchor="${anchor}" fill="${stroke}">${tspans}</text>`,
+        `    <text font-family="Arial" font-size="${fmt(fontSize)}" text-anchor="${anchor}" fill="${stroke}"${transform}>${tspans}</text>`,
       ]
     }
   }
